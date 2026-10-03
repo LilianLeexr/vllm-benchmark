@@ -8,7 +8,8 @@ dataset:
   raw_path: ade20k
   params:
     mode: hierarchical # RINO's ADE20K setting: coarse 10-group pass + fine 150-class pass
-    max_samples: 4
+    subset_file: ade20k_val_100_seed0.txt
+    max_samples: 3
     max_size: [1024, 1024]
     shrink_mode: scale
     size_multiple: 32 # Qwen-Image 2.1 requires dimensions divisible by 32.

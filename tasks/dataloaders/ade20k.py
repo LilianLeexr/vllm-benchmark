@@ -117,6 +117,16 @@ def load_class_names(root: Path) -> list[str]:
     return names
 
 
+def read_subset(name: str | None) -> set[str] | None:
+    """IDs listed in tasks/subsets/<name> (one per line), or None for the full split."""
+    if not name:
+        return None
+    path = Path(__file__).resolve().parents[1] / "subsets" / name
+    if not path.is_file():
+        raise FileNotFoundError(f"Subset file not found: {path}; create it with tasks/subsets/make_subsets.py")
+    return {line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()}
+
+
 def fine_prompt(present: list[int], names: list[str]) -> str:
     parts = [f"the {names[t]} {PROMPT_COLOURS[t][0]}" for t in present]
     return FINE_TEMPLATE.replace("{class_color_list}", ", ".join(parts))
@@ -128,7 +138,7 @@ def coarse_prompt(present_cats: list[int]) -> str:
 
 
 class ADE20KDataset:
-    def __init__(self, root: Path, *, mode: str, max_samples: int | None,
+    def __init__(self, root: Path, *, mode: str, subset: set[str] | None, max_samples: int | None,
                  max_size, shrink_mode: str, size_multiple: int):
         if mode not in {"single", "hierarchical"}:
             raise ValueError("mode must be 'single' or 'hierarchical'")
@@ -142,6 +152,8 @@ class ADE20KDataset:
         for image_path in sorted(image_dir.glob("*.jpg")):
             if max_samples is not None and len(self.items) >= max_samples:
                 break
+            if subset is not None and image_path.stem not in subset:
+                continue
             label_path = label_dir / f"{image_path.stem}.png"
             if not label_path.exists():
                 continue
@@ -152,6 +164,9 @@ class ADE20KDataset:
                 self.items.append((image_path, label_path, present))
         if not self.items:
             raise ValueError(f"No labelled ADE20K validation images found under {root}")
+        if subset is not None and max_samples is None and len(self.items) != len(subset):
+            missing = sorted(subset - {path.stem for path, _, _ in self.items})
+            raise ValueError(f"{len(missing)} subset images missing or unlabelled, e.g. {missing[:3]}")
         self.passes = ["coarse", "fine"] if mode == "hierarchical" else ["fine"]
 
     def __len__(self) -> int:
@@ -167,16 +182,18 @@ class ADE20KDataset:
             sample_id, class_ids = image_path.stem, present
             prompt = fine_prompt(present, self.names)
             colors, lut, n_classes = [PROMPT_COLOURS[t][1] for t in present], FINE_LUT, N_CLASSES
+            class_names = self.names
         else:
             class_ids = sorted({TRAINID_TO_10CAT[t] for t in present})
             sample_id, prompt = image_path.stem + COARSE_SUFFIX, coarse_prompt(class_ids)
             colors, lut, n_classes = [CAT10_PROMPT_COLOURS[c][1] for c in class_ids], COARSE_LUT, N_SUPER
+            class_names = CAT10_GROUP_NAMES
         return Sample(
             sample_id=sample_id,
             image=image,
             prompt=prompt,
             ground_truth={
-                "label_path": str(label_path), "label_lut": lut, "n_classes": n_classes,
+                "label_path": str(label_path), "label_lut": lut, "n_classes": n_classes, "class_names": class_names,
                 "class_ids": class_ids, "colors": [list(c) for c in colors],
                 "stage": stage, "image_id": image_path.stem,
                 # Needed by the aggregator to fuse coarse and fine passes.
@@ -191,6 +208,7 @@ def load_dataset(config: dict) -> ADE20KDataset:
     return ADE20KDataset(
         Path(config["raw_dir"]),
         mode=config.get("mode", "hierarchical"),
+        subset=read_subset(config.get("subset_file")),
         max_samples=config.get("max_samples"),
         max_size=tuple(max_size) if isinstance(max_size, (list, tuple)) else max_size,
         shrink_mode=config.get("shrink_mode", "scale"),

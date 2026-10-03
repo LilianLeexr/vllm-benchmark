@@ -5,7 +5,9 @@ per image. Generated images are re-decoded here, so this also implements RINO's
 hierarchical fusion (coarse 10-group pass constrains the fine 150-class decode)
 and its optional refinement.
 
-Reported metrics (fractions; *_refined after mode filter + small-blob removal):
+Reported metrics (fractions; *_refined after mode filter + small-blob removal;
+*_miou_ci95_low/high is a 95% bootstrap interval over images; <variant>/iou/<class>
+gives per-class IoU for unrefined variants):
     fine_*          single fine pass
     hier_*          coarse + fine fused (hierarchical mode only)
     coarse_pass_*   the 10-group pass against GT mapped to 10 groups
@@ -26,30 +28,42 @@ IGNORE = ev.IGNORE
 
 
 class Totals:
-    def __init__(self, n_classes: int):
-        self.intersection = np.zeros(n_classes, dtype=np.int64)
-        self.union = np.zeros(n_classes, dtype=np.int64)
-        self.gt = np.zeros(n_classes, dtype=np.int64)
-        self.correct = self.total = self.images = 0
+    """Per-image pixel counts for one prediction variant."""
+
+    def __init__(self, class_names: list[str]):
+        self.class_names = list(class_names)
+        self.rows: list[np.ndarray] = []  # per image: [inter (C), union (C), gt (C), correct, total]
 
     def add(self, pred: np.ndarray, gt: np.ndarray) -> None:
-        c = ev.counts(pred, gt, len(self.union))
-        self.intersection += c["intersection"]
-        self.union += c["union"]
-        self.gt += c["gt"]
-        self.correct += c["correct"]
-        self.total += c["total"]
-        self.images += 1
+        c = ev.counts(pred, gt, len(self.class_names))
+        self.rows.append(np.concatenate([c["intersection"], c["union"], c["gt"], [c["correct"], c["total"]]]))
 
-    def summary(self, prefix: str) -> dict[str, float]:
-        if not self.images:
+    def _metrics(self, summed: np.ndarray) -> tuple[float, float, float, np.ndarray, np.ndarray]:
+        n = len(self.class_names)
+        inter, union, gt = summed[:n], summed[n:2 * n], summed[2 * n:3 * n]
+        supported, labelled = union > 0, gt > 0
+        iou = np.divide(inter, union, out=np.zeros(n), where=supported)
+        miou = float(iou[supported].mean()) if supported.any() else 0.0
+        macc = float((inter[labelled] / gt[labelled]).mean()) if labelled.any() else 0.0
+        return miou, macc, float(summed[-2] / max(summed[-1], 1)), iou, supported
+
+    def summary(self, prefix: str, *, bootstrap: int, per_class: bool) -> dict[str, float]:
+        if not self.rows:
             return {}
-        supported, labelled = self.union > 0, self.gt > 0
-        return {
-            f"{prefix}_miou": float((self.intersection[supported] / self.union[supported]).mean()),
-            f"{prefix}_macc": float((self.intersection[labelled] / self.gt[labelled]).mean()),
-            f"{prefix}_aacc": self.correct / max(self.total, 1),
-        }
+        rows = np.stack(self.rows)
+        miou, macc, aacc, iou, supported = self._metrics(rows.sum(axis=0))
+        out = {f"{prefix}_miou": miou, f"{prefix}_macc": macc, f"{prefix}_aacc": aacc,
+               f"{prefix}_images": float(len(rows))}
+        if bootstrap and len(rows) > 1:
+            # Resample images with replacement; 95% percentile interval of dataset-level mIoU.
+            rng = np.random.default_rng(0)
+            samples = [self._metrics(rows[rng.integers(0, len(rows), len(rows))].sum(axis=0))[0]
+                       for _ in range(bootstrap)]
+            out[f"{prefix}_miou_ci95_low"], out[f"{prefix}_miou_ci95_high"] = map(float, np.percentile(samples, [2.5, 97.5]))
+        if per_class:
+            out.update({f"{prefix}/iou/{name}": float(iou[c])
+                        for c, name in enumerate(self.class_names) if supported[c]})
+        return out
 
 
 def _scored_images(record: dict) -> list[Path]:
@@ -83,6 +97,7 @@ def fuse(coarse: np.ndarray, fine_image: Image.Image, class_ids: list[int], colo
 
 def aggregate(records: list[dict], config: dict) -> dict[str, float]:
     space = config.get("decode_space", "rgb")
+    bootstrap = config.get("bootstrap", 1000)
     do_refine = config.get("refine", True)
     window, min_area = config.get("refine_window", 5), config.get("refine_min_area", 100)
     by_image: dict[str, dict[str, dict]] = {}
@@ -93,16 +108,16 @@ def aggregate(records: list[dict], config: dict) -> dict[str, float]:
 
     totals: dict[str, Totals] = {}
 
-    def add(name: str, n_classes: int, pred: np.ndarray, gt: np.ndarray, groups=None) -> None:
+    def add(name: str, truth: dict, pred: np.ndarray, gt: np.ndarray, groups=None) -> None:
         """Count pred (and its refined version); optionally also collapsed to coarse groups."""
         variants = [("", pred)]
         if do_refine:
-            variants.append(("_refined", ev.refine(pred, n_classes, window=window, min_area=min_area)))
+            variants.append(("_refined", ev.refine(pred, truth["n_classes"], window=window, min_area=min_area)))
         for suffix, value in variants:
-            totals.setdefault(name + suffix, Totals(n_classes)).add(value, gt)
+            totals.setdefault(name + suffix, Totals(truth["class_names"])).add(value, gt)
             if groups is not None:
-                lut, gt_groups, n_groups = groups
-                totals.setdefault(f"coarse_{name}{suffix}", Totals(n_groups)).add(
+                lut, gt_groups, group_names = groups
+                totals.setdefault(f"coarse_{name}{suffix}", Totals(group_names)).add(
                     np.where(value == IGNORE, IGNORE, lut[np.minimum(value, 255)]), gt_groups)
 
     for stages in by_image.values():
@@ -110,10 +125,10 @@ def aggregate(records: list[dict], config: dict) -> dict[str, float]:
         if fine is not None:
             sample = fine["sample"].load()
             truth = sample.ground_truth
-            n_classes, gt = truth["n_classes"], ev.evaluable(ev.load_label(truth), sample)
+            gt = ev.evaluable(ev.load_label(truth), sample)
             for path in _scored_images(fine):
                 pred = ev.decode(_open(path, sample), truth["class_ids"], truth["colors"], space=space)
-                add("fine", n_classes, ev.to_original(pred, sample), gt)
+                add("fine", truth, ev.to_original(pred, sample), gt)
         if coarse is not None:
             coarse_sample = coarse["sample"].load()
             coarse_truth = coarse_sample.ground_truth
@@ -123,7 +138,7 @@ def aggregate(records: list[dict], config: dict) -> dict[str, float]:
                 # RINO decodes the coarse pass in RGB and does not refine it.
                 pred = ev.decode(_open(path, coarse_sample), coarse_truth["class_ids"], coarse_truth["colors"])
                 coarse_preds.append(pred)
-                totals.setdefault("coarse_pass", Totals(coarse_truth["n_classes"])).add(
+                totals.setdefault("coarse_pass", Totals(coarse_truth["class_names"])).add(
                     ev.to_original(pred, coarse_sample), coarse_gt)
             if fine is not None:
                 lut = np.asarray(truth["fine_to_coarse"] + [IGNORE] * (256 - len(truth["fine_to_coarse"])),
@@ -133,12 +148,10 @@ def aggregate(records: list[dict], config: dict) -> dict[str, float]:
                 for coarse_pred, path in zip(coarse_preds, _scored_images(fine)):
                     fused = fuse(coarse_pred, _open(path, sample), truth["class_ids"], truth["colors"],
                                  truth["fine_to_coarse"])
-                    add("hier", n_classes, ev.to_original(fused, sample), gt,
-                        groups=(lut, gt_groups, coarse_truth["n_classes"]))
+                    add("hier", truth, ev.to_original(fused, sample), gt,
+                        groups=(lut, gt_groups, coarse_truth["class_names"]))
 
     overall: dict[str, float] = {}
     for name, total in totals.items():
-        overall.update(total.summary(name))
-        if total.images:
-            overall[f"{name}_images"] = float(total.images)
+        overall.update(total.summary(name, bootstrap=bootstrap, per_class=not name.endswith("_refined")))
     return overall

@@ -1,5 +1,5 @@
 task_name: cityscapes_semseg
-generation_version: qwen-16gb-present-v1
+generation_version: qwen-t4-sub100-present-s40 # change whenever model, steps or prompts change
 output_root: ../outputs
 # Empty so the model sees exactly RINO's segmentation prompt.
 system_prompt: ""
@@ -9,7 +9,8 @@ dataset:
   params:
     class_list: present # RINO: only GT-present classes; all = Vision Banana's full 19-class list
     mode: single # RINO's Cityscapes setting; hierarchical adds a 7-group coarse pass
-    max_samples: null # e.g. 20 for a quick bench
+    subset_file: cityscapes_val_100_seed0.txt # fixed shared subset, see tasks/subsets/make_subsets.py
+    max_samples: null # e.g. 5 for a quick bench (first N of the subset)
     max_size: [1024, 1024]
     shrink_mode: scale
     size_multiple: 32 # Qwen-Image 2.1 requires dimensions divisible by 32.

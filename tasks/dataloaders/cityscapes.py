@@ -76,6 +76,16 @@ FINE_LUT = [_LABEL_TO_TRAIN.get(v, IGNORE) for v in range(256)]
 COARSE_LUT = [TRAINID_TO_7CAT[t] if t != IGNORE else IGNORE for t in FINE_LUT]
 
 
+def read_subset(name: str | None) -> set[str] | None:
+    """IDs listed in tasks/subsets/<name> (one per line), or None for the full split."""
+    if not name:
+        return None
+    path = Path(__file__).resolve().parents[1] / "subsets" / name
+    if not path.is_file():
+        raise FileNotFoundError(f"Subset file not found: {path}; create it with tasks/subsets/make_subsets.py")
+    return {line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()}
+
+
 def fine_prompt(class_ids: list[int]) -> str:
     parts = [f"the {CLASSES[t]} {PROMPT_COLOURS[t][0]}" for t in class_ids]
     return FINE_TEMPLATE.replace("{class_color_list}", ", ".join(parts))
@@ -87,7 +97,7 @@ def coarse_prompt(cat_ids: list[int]) -> str:
 
 
 class CityscapesDataset:
-    def __init__(self, root: Path, *, class_list: str, mode: str, max_samples: int | None,
+    def __init__(self, root: Path, *, class_list: str, mode: str, subset: set[str] | None, max_samples: int | None,
                  max_size, shrink_mode: str, size_multiple: int):
         if class_list not in {"present", "all"}:
             raise ValueError("class_list must be 'present' or 'all'")
@@ -105,6 +115,8 @@ class CityscapesDataset:
                 if max_samples is not None and len(self.items) >= max_samples:
                     break
                 stem = image_path.name.removesuffix("_leftImg8bit.png")
+                if subset is not None and stem not in subset:
+                    continue
                 label_path = label_root / city.name / f"{stem}_gtFine_labelIds.png"
                 if not label_path.exists():
                     continue
@@ -115,6 +127,9 @@ class CityscapesDataset:
                     self.items.append((image_path, label_path, present))
         if not self.items:
             raise ValueError(f"No labelled Cityscapes validation images found under {root}")
+        if subset is not None and max_samples is None and len(self.items) != len(subset):
+            missing = sorted(subset - {path.name.removesuffix("_leftImg8bit.png") for path, _, _ in self.items})
+            raise ValueError(f"{len(missing)} subset images missing or unlabelled, e.g. {missing[:3]}")
         self.passes = ["coarse", "fine"] if mode == "hierarchical" else ["fine"]
 
     def __len__(self) -> int:
@@ -131,16 +146,18 @@ class CityscapesDataset:
         if stage == "fine":
             sample_id, class_ids, prompt = image_id, listed, fine_prompt(listed)
             colors, lut, n_classes = [PROMPT_COLOURS[t][1] for t in listed], FINE_LUT, N_CLASSES
+            class_names = CLASSES
         else:
             class_ids = sorted({TRAINID_TO_7CAT[t] for t in listed})
             sample_id, prompt = image_id + COARSE_SUFFIX, coarse_prompt(class_ids)
             colors, lut, n_classes = [CAT7_PROMPT_COLOURS[c][1] for c in class_ids], COARSE_LUT, N_SUPER
+            class_names = CAT7_GROUP_NAMES
         return Sample(
             sample_id=sample_id,
             image=image,
             prompt=prompt,
             ground_truth={
-                "label_path": str(label_path), "label_lut": lut, "n_classes": n_classes,
+                "label_path": str(label_path), "label_lut": lut, "n_classes": n_classes, "class_names": class_names,
                 "class_ids": class_ids, "colors": [list(c) for c in colors],
                 "stage": stage, "image_id": image_id,
                 # Needed by the aggregator to fuse coarse and fine passes.
@@ -156,6 +173,7 @@ def load_dataset(config: dict) -> CityscapesDataset:
         Path(config["raw_dir"]),
         class_list=config.get("class_list", "present"),
         mode=config.get("mode", "single"),
+        subset=read_subset(config.get("subset_file")),
         max_samples=config.get("max_samples"),
         max_size=tuple(max_size) if isinstance(max_size, (list, tuple)) else max_size,
         shrink_mode=config.get("shrink_mode", "scale"),

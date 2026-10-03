@@ -1,5 +1,5 @@
 task_name: ade20k_semseg
-generation_version: qwen-16gb-hier-v1
+generation_version: qwen-t4-sub100-hier-s40 # change whenever model, steps or prompts change
 output_root: ../outputs
 # Empty so the model sees exactly RINO's segmentation prompt.
 system_prompt: ""
@@ -8,7 +8,8 @@ dataset:
   raw_path: ade20k
   params:
     mode: hierarchical # RINO's ADE20K setting: coarse 10-group pass + fine 150-class pass
-    max_samples: null # e.g. 20 for a quick bench
+    subset_file: ade20k_val_100_seed0.txt # fixed shared subset, see tasks/subsets/make_subsets.py
+    max_samples: null # e.g. 5 for a quick bench (first N of the subset)
     max_size: [1024, 1024]
     shrink_mode: scale
     size_multiple: 32 # Qwen-Image 2.1 requires dimensions divisible by 32.
