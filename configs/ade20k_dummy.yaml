@@ -1,0 +1,38 @@
+task_name: ade20k_semseg
+generation_version: dummy-hier-v1
+output_root: ../outputs
+# Empty so the model sees exactly RINO's segmentation prompt.
+system_prompt: ""
+dataset:
+  path: ade20k.py
+  raw_path: ade20k
+  params:
+    mode: hierarchical # RINO's ADE20K setting: coarse 10-group pass + fine 150-class pass
+    max_samples: 4
+    max_size: [1024, 1024]
+    shrink_mode: scale
+    size_multiple: 32 # Qwen-Image 2.1 requires dimensions divisible by 32.
+evaluator:
+  path: semseg.py
+  params:
+    decode_space: rgb # RINO default; lab is optional
+aggregator:
+  path: semseg.py
+  params:
+    decode_space: rgb
+    refine: true # also report *_refined (5x5 mode filter + blobs < 100 px)
+    refine_window: 5
+    refine_min_area: 100
+model:
+  backend: dummy
+  id: white-background-dummy-v1
+trials: 1
+base_seed: 42
+concurrency: 3
+retries:
+  max_attempts: 3
+  base_delay_s: 1
+  max_delay_s: 30
+save_inputs: true
+s3:
+  enabled: false
