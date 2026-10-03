@@ -1,5 +1,5 @@
 task_name: cityscapes_semseg
-generation_version: qwen-t4-sub100-all-s40 # change whenever model, steps or prompts change
+generation_version: qwen-t4-sub100-all-s12 # change whenever model, steps or prompts change
 output_root: ../outputs
 # Empty so the model sees exactly RINO's segmentation prompt.
 system_prompt: ""
@@ -32,7 +32,7 @@ model:
   cache_dir: ../model-cache
   profile: vram_16gb
   options:
-    num_inference_steps: 40
+    num_inference_steps: 12 # 40 vs 20 vs 12 on 5 Cityscapes images: same mIoU, 2x faster
     vae_precision: bf16
 trials: 1
 base_seed: 42
