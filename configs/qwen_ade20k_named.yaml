@@ -1,0 +1,46 @@
+task_name: ade20k_semseg
+generation_version: qwen-t4-sub100-single-named-s12 # change whenever model, steps or prompts change
+output_root: ../outputs
+# Empty so the model sees exactly RINO's segmentation prompt.
+system_prompt: ""
+dataset:
+  path: ade20k.py
+  raw_path: ade20k
+  params:
+    mode: single # fine 150-class pass only; compare with fine_* of qwen_ade20k (same seeds and template)
+    palette: named # colour names that match their RGB values, unlike RINO's palette
+    subset_file: ade20k_val_100_seed0.txt # fixed shared subset, see tasks/subsets/make_subsets.py
+    max_samples: null # e.g. 5 for a quick bench (first N of the subset)
+    max_size: [1024, 1024]
+    shrink_mode: scale
+    size_multiple: 32 # Qwen-Image 2.1 requires dimensions divisible by 32.
+evaluator:
+  path: semseg.py
+  params:
+    decode_space: rgb # RINO default; lab is optional
+aggregator:
+  path: semseg.py
+  params:
+    decode_space: rgb
+    refine: true # also report *_refined (5x5 mode filter + blobs < 100 px)
+    refine_window: 5
+    refine_min_area: 100
+model:
+  backend: qwen
+  id: Qwen/Qwen-Image-2.1
+  revision: 790c92633540aa0cb11d9abf19eb46d861714758
+  cache_dir: ../model-cache
+  profile: vram_16gb
+  options:
+    num_inference_steps: 12 # 40 vs 20 vs 12 on 5 Cityscapes images: same mIoU, 2x faster
+    vae_precision: bf16
+trials: 1
+base_seed: 42
+concurrency: 3 # Remote only. Local Qwen always uses one worker.
+retries:
+  max_attempts: 3
+  base_delay_s: 1
+  max_delay_s: 30
+save_inputs: true
+s3:
+  enabled: false

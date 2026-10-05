@@ -7,6 +7,8 @@ are copied from palette_ade20k.py, codec.py and codec_ade10.py.
 
 mode: single
     one fine sample per image (150-class prompt).
+palette: rino (default) | named
+    named fixes RINO's mismatched colour names; see NAMED_COLOURS.
 mode: hierarchical (RINO --hierarchical, used for its ADE20K numbers)
     two samples per image: ``<id>__coarse`` (10 super-categories) and ``<id>``
     (fine). The aggregator fuses them.
@@ -102,6 +104,24 @@ def build_palette(n: int = N_CLASSES) -> list[tuple[str, tuple[int, int, int]]]:
 
 PROMPT_COLOURS = build_palette()
 
+# palette: named (our fix). RINO's generated palette pairs names with unrelated RGB
+# values (its "orange" is (29, 58, 127)), so the model paints the named colour and is
+# decoded against another. These are CSS colours whose names match their RGB: ten
+# basics first, then greedily the farthest remaining colour in CIELAB. Each image
+# gives its largest classes the first entries; images have at most 27 classes.
+NAMED_COLOURS = [
+    ("red", (255, 0, 0)), ("green", (0, 255, 0)), ("blue", (0, 0, 255)), ("yellow", (255, 255, 0)),
+    ("cyan", (0, 255, 255)), ("magenta", (255, 0, 255)), ("white", (255, 255, 255)), ("orange", (255, 165, 0)),
+    ("purple", (128, 0, 128)), ("gray", (128, 128, 128)), ("forest green", (34, 139, 34)),
+    ("salmon", (250, 128, 114)), ("royal blue", (65, 105, 225)), ("khaki", (240, 230, 140)),
+    ("hot pink", (255, 105, 180)), ("maroon", (128, 0, 0)), ("olive", (128, 128, 0)),
+    ("light green", (144, 238, 144)), ("navy", (0, 0, 128)), ("plum", (221, 160, 221)),
+    ("sky blue", (135, 206, 235)), ("lime green", (50, 205, 50)), ("crimson", (220, 20, 60)),
+    ("chocolate", (210, 105, 30)), ("steel blue", (70, 130, 180)), ("teal", (0, 128, 128)),
+    ("tan", (210, 180, 140)), ("pink", (255, 192, 203)), ("violet", (238, 130, 238)),
+    ("dark gray", (64, 64, 64)), ("sienna", (160, 82, 45)), ("gold", (255, 215, 0)),
+]
+
 # Raw annotation value (0 = unlabeled, 1..150) -> eval id.
 FINE_LUT = [IGNORE] + list(range(N_CLASSES)) + [IGNORE] * (255 - N_CLASSES)
 COARSE_LUT = [IGNORE] + TRAINID_TO_10CAT + [IGNORE] * (255 - N_CLASSES)
@@ -127,8 +147,9 @@ def read_subset(name: str | None) -> set[str] | None:
     return {line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()}
 
 
-def fine_prompt(present: list[int], names: list[str]) -> str:
-    parts = [f"the {names[t]} {PROMPT_COLOURS[t][0]}" for t in present]
+def fine_prompt(present: list[int], names: list[str], colours: dict | None = None) -> str:
+    colours = colours or {t: PROMPT_COLOURS[t] for t in present}
+    parts = [f"the {names[t]} {colours[t][0]}" for t in present]
     return FINE_TEMPLATE.replace("{class_color_list}", ", ".join(parts))
 
 
@@ -138,7 +159,7 @@ def coarse_prompt(present_cats: list[int]) -> str:
 
 
 class ADE20KDataset:
-    def __init__(self, root: Path, *, mode: str, subset: set[str] | None, max_samples: int | None,
+    def __init__(self, root: Path, *, mode: str, palette: str, subset: set[str] | None, max_samples: int | None,
                  max_size, shrink_mode: str, size_multiple: int):
         if mode not in {"single", "hierarchical"}:
             raise ValueError("mode must be 'single' or 'hierarchical'")
@@ -146,9 +167,12 @@ class ADE20KDataset:
         if not image_dir.is_dir() or not label_dir.is_dir():
             raise FileNotFoundError(f"Expected images/validation and annotations/validation under {root}")
         self.names = load_class_names(root)
-        self.mode = mode
+        if palette not in {"rino", "named"}:
+            raise ValueError("palette must be 'rino' or 'named'")
+        self.mode, self.palette = mode, palette
         self.preprocess = {"max_size": max_size, "shrink_mode": shrink_mode, "size_multiple": size_multiple}
         self.items: list[tuple[Path, Path, list[int]]] = []
+        self.by_area: dict[str, list[int]] = {}  # present classes, largest first
         for image_path in sorted(image_dir.glob("*.jpg")):
             if max_samples is not None and len(self.items) >= max_samples:
                 break
@@ -158,8 +182,9 @@ class ADE20KDataset:
             if not label_path.exists():
                 continue
             with Image.open(label_path) as label:
-                values = np.unique(np.asarray(label, dtype=np.uint8))
+                values, areas = np.unique(np.asarray(label, dtype=np.uint8), return_counts=True)
             present = sorted(int(v) - 1 for v in values if 1 <= v <= N_CLASSES)
+            self.by_area[image_path.stem] = [int(v) - 1 for _, v in sorted(zip(-areas, values)) if 1 <= v <= N_CLASSES]
             if present:  # RINO skips images with no labelled pixels
                 self.items.append((image_path, label_path, present))
         if not self.items:
@@ -180,8 +205,14 @@ class ADE20KDataset:
         image, transform, parameters = preprocess_image(image, **self.preprocess)
         if stage == "fine":
             sample_id, class_ids = image_path.stem, present
-            prompt = fine_prompt(present, self.names)
-            colors, lut, n_classes = [PROMPT_COLOURS[t][1] for t in present], FINE_LUT, N_CLASSES
+            if self.palette == "named":
+                if len(present) > len(NAMED_COLOURS):
+                    raise ValueError(f"{sample_id} has {len(present)} classes; only {len(NAMED_COLOURS)} named colours")
+                colours = dict(zip(self.by_area[sample_id], NAMED_COLOURS))
+            else:
+                colours = {t: PROMPT_COLOURS[t] for t in present}
+            prompt = fine_prompt(present, self.names, colours)
+            colors, lut, n_classes = [colours[t][1] for t in present], FINE_LUT, N_CLASSES
             class_names = self.names
         else:
             class_ids = sorted({TRAINID_TO_10CAT[t] for t in present})
@@ -208,6 +239,7 @@ def load_dataset(config: dict) -> ADE20KDataset:
     return ADE20KDataset(
         Path(config["raw_dir"]),
         mode=config.get("mode", "hierarchical"),
+        palette=config.get("palette", "rino"),
         subset=read_subset(config.get("subset_file")),
         max_samples=config.get("max_samples"),
         max_size=tuple(max_size) if isinstance(max_size, (list, tuple)) else max_size,
