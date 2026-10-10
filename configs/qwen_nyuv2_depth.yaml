@@ -1,0 +1,41 @@
+# Zero-shot NYUv2 depth (Eigen test split, 654 images) with Qwen-Image 2.1.
+# Protocol follows RINO (arXiv:2607.12450): grayscale depth prompt, BT.709
+# luminance decode, least-squares affine alignment, Eigen crop, depth < 10 m.
+task_name: nyuv2_depth
+generation_version: qwen21-1024-s40-v1
+output_root: ../outputs
+system_prompt: ""  # the RINO prompt is the whole instruction
+dataset:
+  path: nyuv2_depth.py   # tasks/dataloaders/nyuv2_depth.py
+  raw_path: nyuv2        # raw/nyuv2/ (scripts/download_nyuv2.sh)
+  params:
+    split_file: filename_list_test.txt
+    upscale_long_side: 1024  # 640x480 -> 1024x768, near the model's ~1 MP condition size
+    size_multiple: 32        # Qwen-Image 2.1 requires dimensions divisible by 32
+evaluator:
+  path: nyuv2_depth.py   # tasks/evaluators/nyuv2_depth.py
+  params:
+    min_depth: 0.001
+    max_depth: 10.0
+    eigen_crop: true
+model:
+  backend: qwen
+  id: Qwen/Qwen-Image-2.1
+  revision: 790c92633540aa0cb11d9abf19eb46d861714758
+  cache_dir: ../model-cache
+  profile: custom  # full bf16 on one 48 GB GPU (RTX A6000); use vram_16gb on smaller cards
+  options:
+    transformer_precision: bf16
+    text_encoder_precision: bf16
+    vae_precision: bf16
+    num_inference_steps: 40
+trials: 1
+base_seed: 42
+concurrency: 1
+retries:
+  max_attempts: 3
+  base_delay_s: 1
+  max_delay_s: 30
+save_inputs: true
+s3:
+  enabled: false

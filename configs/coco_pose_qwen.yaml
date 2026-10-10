@@ -1,0 +1,50 @@
+task_name: coco_pose
+generation_version: qwen-coco-pose-v1
+output_root: ../outputs
+system_prompt: |
+  Edit the input image according to the instruction. Return one image.
+dataset:
+  path: coco_keypoints.py
+  raw_path: coco2017
+  params:
+    # Expected layout: raw/coco2017/val2017/*.jpg and annotations/person_keypoints_val2017.json.
+    annotations_file: annotations/person_keypoints_val2017.json
+    images_dir: val2017
+    # First-version protocol: one unambiguous, sufficiently large person per image.
+    min_visible_keypoints: 10
+    min_person_area: 4096
+    # Set a small value (e.g. 32) while debugging; omit for the complete filtered split.
+    # max_samples: 32
+    max_size: [1024, 1024]
+    shrink_mode: scale
+    size_multiple: 32
+    prompt: Keep the person and their pose unchanged. Return one image.
+evaluator:
+  path: coco_pose.py
+  params:
+    detection_score_threshold: 0.5
+    # Candidate persons are matched to the selected GT person using bounding-box IoU.
+    match_iou_threshold: 0.1
+    # A detected joint below this Keypoint R-CNN confidence is counted as missing.
+    keypoint_score_threshold: 0.2
+    normalization: bbox_diagonal
+    pck_thresholds: [0.05, 0.10, 0.20]
+model:
+  backend: qwen
+  id: Qwen/Qwen-Image-2.1
+  revision: 790c92633540aa0cb11d9abf19eb46d861714758
+  cache_dir: ../model-cache
+  profile: vram_16gb
+  options:
+    num_inference_steps: 40
+    vae_precision: bf16
+trials: 1
+base_seed: 42
+concurrency: 3
+retries:
+  max_attempts: 3
+  base_delay_s: 1
+  max_delay_s: 30
+save_inputs: true
+s3:
+  enabled: false
