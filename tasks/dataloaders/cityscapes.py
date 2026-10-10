@@ -162,6 +162,7 @@ class CityscapesDataset:
                 "stage": stage, "image_id": image_id,
                 # Needed by the aggregator to fuse coarse and fine passes.
                 "fine_to_coarse": TRAINID_TO_7CAT,
+                "coarse_class_names": CAT7_GROUP_NAMES,
             },
             metadata={"source_path": str(image_path), "transform": transform.to_dict(), "preprocessing": parameters},
         )

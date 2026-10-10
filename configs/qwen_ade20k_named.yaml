@@ -9,6 +9,7 @@ dataset:
   params:
     mode: single # fine 150-class pass only; compare with fine_* of qwen_ade20k (same seeds and template)
     palette: named # colour names that match their RGB values, unlike RINO's palette
+    color_order: area # reproduces the first named run; new runs use frequency
     subset_file: ade20k_val_100_seed0.txt # fixed shared subset, see tasks/subsets/make_subsets.py
     max_samples: null # e.g. 5 for a quick bench (first N of the subset)
     max_size: [1024, 1024]

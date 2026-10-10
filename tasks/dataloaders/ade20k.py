@@ -9,6 +9,10 @@ mode: single
     one fine sample per image (150-class prompt).
 palette: rino (default) | named
     named fixes RINO's mismatched colour names; see NAMED_COLOURS.
+color_order: frequency (default) | area
+    how named colours are handed out among an image's classes: by dataset-wide
+    class frequency, or by this image's GT areas (uses GT; kept only to reproduce
+    the first 100-image named run).
 mode: hierarchical (RINO --hierarchical, used for its ADE20K numbers)
     two samples per image: ``<id>__coarse`` (10 super-categories) and ``<id>``
     (fine). The aggregator fuses them.
@@ -108,7 +112,8 @@ PROMPT_COLOURS = build_palette()
 # values (its "orange" is (29, 58, 127)), so the model paints the named colour and is
 # decoded against another. These are CSS colours whose names match their RGB: ten
 # basics first, then greedily the farthest remaining colour in CIELAB. Each image
-# gives its largest classes the first entries; images have at most 27 classes.
+# gives its most frequent classes (see color_order) the first entries; images have
+# at most 27 classes.
 NAMED_COLOURS = [
     ("red", (255, 0, 0)), ("green", (0, 255, 0)), ("blue", (0, 0, 255)), ("yellow", (255, 255, 0)),
     ("cyan", (0, 255, 255)), ("magenta", (255, 0, 255)), ("white", (255, 255, 255)), ("orange", (255, 165, 0)),
@@ -137,6 +142,16 @@ def load_class_names(root: Path) -> list[str]:
     return names
 
 
+def load_class_ratios(root: Path) -> list[float]:
+    """Pixel ratio of each class over the whole dataset (objectInfo150.txt "Ratio")."""
+    ratios = [0.0] * N_CLASSES
+    for line in (root / "objectInfo150.txt").read_text(encoding="utf-8").splitlines()[1:]:
+        parts = line.split("\t")
+        if len(parts) >= 5 and 1 <= int(parts[0]) <= N_CLASSES:
+            ratios[int(parts[0]) - 1] = float(parts[1])
+    return ratios
+
+
 def read_subset(name: str | None) -> set[str] | None:
     """IDs listed in tasks/subsets/<name> (one per line), or None for the full split."""
     if not name:
@@ -159,7 +174,7 @@ def coarse_prompt(present_cats: list[int]) -> str:
 
 
 class ADE20KDataset:
-    def __init__(self, root: Path, *, mode: str, palette: str, subset: set[str] | None, max_samples: int | None,
+    def __init__(self, root: Path, *, mode: str, palette: str, color_order: str, subset: set[str] | None, max_samples: int | None,
                  max_size, shrink_mode: str, size_multiple: int):
         if mode not in {"single", "hierarchical"}:
             raise ValueError("mode must be 'single' or 'hierarchical'")
@@ -169,7 +184,12 @@ class ADE20KDataset:
         self.names = load_class_names(root)
         if palette not in {"rino", "named"}:
             raise ValueError("palette must be 'rino' or 'named'")
-        self.mode, self.palette = mode, palette
+        if color_order not in {"frequency", "area"}:
+            raise ValueError("color_order must be 'frequency' or 'area'")
+        self.mode, self.palette, self.color_order = mode, palette, color_order
+        ratios = load_class_ratios(root)
+        # Dataset-wide class rank, so colour assignment does not depend on this image's GT areas.
+        self.frequency_rank = {c: r for r, c in enumerate(sorted(range(N_CLASSES), key=lambda c: (-ratios[c], c)))}
         self.preprocess = {"max_size": max_size, "shrink_mode": shrink_mode, "size_multiple": size_multiple}
         self.items: list[tuple[Path, Path, list[int]]] = []
         self.by_area: dict[str, list[int]] = {}  # present classes, largest first
@@ -208,7 +228,9 @@ class ADE20KDataset:
             if self.palette == "named":
                 if len(present) > len(NAMED_COLOURS):
                     raise ValueError(f"{sample_id} has {len(present)} classes; only {len(NAMED_COLOURS)} named colours")
-                colours = dict(zip(self.by_area[sample_id], NAMED_COLOURS))
+                order = (self.by_area[sample_id] if self.color_order == "area"
+                         else sorted(present, key=self.frequency_rank.__getitem__))
+                colours = dict(zip(order, NAMED_COLOURS))
             else:
                 colours = {t: PROMPT_COLOURS[t] for t in present}
             prompt = fine_prompt(present, self.names, colours)
@@ -229,6 +251,7 @@ class ADE20KDataset:
                 "stage": stage, "image_id": image_path.stem,
                 # Needed by the aggregator to fuse coarse and fine passes.
                 "fine_to_coarse": TRAINID_TO_10CAT,
+                "coarse_class_names": CAT10_GROUP_NAMES,
             },
             metadata={"source_path": str(image_path), "transform": transform.to_dict(), "preprocessing": parameters},
         )
@@ -240,6 +263,7 @@ def load_dataset(config: dict) -> ADE20KDataset:
         Path(config["raw_dir"]),
         mode=config.get("mode", "hierarchical"),
         palette=config.get("palette", "rino"),
+        color_order=config.get("color_order", "frequency"),
         subset=read_subset(config.get("subset_file")),
         max_samples=config.get("max_samples"),
         max_size=tuple(max_size) if isinstance(max_size, (list, tuple)) else max_size,

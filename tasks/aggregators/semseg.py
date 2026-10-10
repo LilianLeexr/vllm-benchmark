@@ -12,6 +12,7 @@ gives per-class IoU for unrefined variants):
     hier_*          coarse + fine fused (hierarchical mode only)
     coarse_pass_*   the 10-group pass against GT mapped to 10 groups
     coarse_hier_*   fused prediction collapsed to 10 groups
+    coarse_fine_*   single fine prediction collapsed to the coarse groups (no extra pass)
 """
 
 from __future__ import annotations
@@ -126,9 +127,13 @@ def aggregate(records: list[dict], config: dict) -> dict[str, float]:
             sample = fine["sample"].load()
             truth = sample.ground_truth
             gt = ev.evaluable(ev.load_label(truth), sample)
+            lut = np.asarray(truth["fine_to_coarse"] + [IGNORE] * (256 - len(truth["fine_to_coarse"])), dtype=np.int32)
+            gt_groups = np.where(gt == IGNORE, IGNORE, lut[np.minimum(gt, 255)])
+            # Also score the fine prediction collapsed to the coarse groups (coarse_fine_*).
+            groups = (lut, gt_groups, truth["coarse_class_names"]) if "coarse_class_names" in truth else None
             for path in _scored_images(fine):
                 pred = ev.decode(_open(path, sample), truth["class_ids"], truth["colors"], space=space)
-                add("fine", truth, ev.to_original(pred, sample), gt)
+                add("fine", truth, ev.to_original(pred, sample), gt, groups=groups)
         if coarse is not None:
             coarse_sample = coarse["sample"].load()
             coarse_truth = coarse_sample.ground_truth
@@ -141,9 +146,6 @@ def aggregate(records: list[dict], config: dict) -> dict[str, float]:
                 totals.setdefault("coarse_pass", Totals(coarse_truth["class_names"])).add(
                     ev.to_original(pred, coarse_sample), coarse_gt)
             if fine is not None:
-                lut = np.asarray(truth["fine_to_coarse"] + [IGNORE] * (256 - len(truth["fine_to_coarse"])),
-                                 dtype=np.int32)
-                gt_groups = np.where(gt == IGNORE, IGNORE, lut[np.minimum(gt, 255)])
                 # Pair trials by index; with trials: 1 this is one pair per image.
                 for coarse_pred, path in zip(coarse_preds, _scored_images(fine)):
                     fused = fuse(coarse_pred, _open(path, sample), truth["class_ids"], truth["colors"],
