@@ -9,10 +9,10 @@ mode: single
     one fine sample per image (150-class prompt).
 palette: rino (default) | named
     named fixes RINO's mismatched colour names; see NAMED_COLOURS.
-color_order: frequency (default) | area
+color_order: frequency | area (default, for reproducibility)
     how named colours are handed out among an image's classes: by dataset-wide
-    class frequency, or by this image's GT areas (uses GT; kept only to reproduce
-    the first 100-image named run).
+    class frequency, or by this image's GT areas. area uses GT and is the default
+    only so the finished 100-image named run reproduces; new configs set frequency.
 mode: hierarchical (RINO --hierarchical, used for its ADE20K numbers)
     two samples per image: ``<id>__coarse`` (10 super-categories) and ``<id>``
     (fine). The aggregator fuses them.
@@ -263,7 +263,7 @@ def load_dataset(config: dict) -> ADE20KDataset:
         Path(config["raw_dir"]),
         mode=config.get("mode", "hierarchical"),
         palette=config.get("palette", "rino"),
-        color_order=config.get("color_order", "frequency"),
+        color_order=config.get("color_order", "area"),
         subset=read_subset(config.get("subset_file")),
         max_samples=config.get("max_samples"),
         max_size=tuple(max_size) if isinstance(max_size, (list, tuple)) else max_size,
