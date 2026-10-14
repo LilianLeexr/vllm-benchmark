@@ -152,6 +152,21 @@ def load_class_ratios(root: Path) -> list[float]:
     return ratios
 
 
+def _area_limit(size: tuple[int, int], max_size, max_pixels: int):
+    """Tighten max_size so the scaled image has at most max_pixels pixels.
+
+    Images already within the limit keep the original max_size, so only oversized
+    ones change (2 of 2,000 ADE20K val images at 1024 px exceed 1024x512 pixels).
+    """
+    width, height = size
+    bound = (max_size, max_size) if isinstance(max_size, int) else (max_size or (width, height))
+    factor = min(1.0, bound[0] / width, bound[1] / height)
+    if width * height * factor * factor <= max_pixels:
+        return max_size
+    factor = (max_pixels / (width * height)) ** 0.5
+    return (max(1, int(width * factor)), max(1, int(height * factor)))
+
+
 def read_subset(name: str | None) -> set[str] | None:
     """IDs listed in tasks/subsets/<name> (one per line), or None for the full split."""
     if not name:
@@ -174,7 +189,7 @@ def coarse_prompt(present_cats: list[int]) -> str:
 
 
 class ADE20KDataset:
-    def __init__(self, root: Path, *, mode: str, palette: str, color_order: str, subset: set[str] | None, max_samples: int | None,
+    def __init__(self, root: Path, *, mode: str, palette: str, color_order: str, max_pixels: int | None, subset: set[str] | None, max_samples: int | None,
                  max_size, shrink_mode: str, size_multiple: int):
         if mode not in {"single", "hierarchical"}:
             raise ValueError("mode must be 'single' or 'hierarchical'")
@@ -191,6 +206,7 @@ class ADE20KDataset:
         # Dataset-wide class rank, so colour assignment does not depend on this image's GT areas.
         self.frequency_rank = {c: r for r, c in enumerate(sorted(range(N_CLASSES), key=lambda c: (-ratios[c], c)))}
         self.preprocess = {"max_size": max_size, "shrink_mode": shrink_mode, "size_multiple": size_multiple}
+        self.max_pixels = max_pixels
         self.items: list[tuple[Path, Path, list[int]]] = []
         self.by_area: dict[str, list[int]] = {}  # present classes, largest first
         for image_path in sorted(image_dir.glob("*.jpg")):
@@ -222,7 +238,10 @@ class ADE20KDataset:
         stage = self.passes[index % len(self.passes)]
         with Image.open(image_path) as source:
             image = source.convert("RGB")
-        image, transform, parameters = preprocess_image(image, **self.preprocess)
+        preprocess = dict(self.preprocess)
+        if self.max_pixels:
+            preprocess["max_size"] = _area_limit(image.size, preprocess["max_size"], self.max_pixels)
+        image, transform, parameters = preprocess_image(image, **preprocess)
         if stage == "fine":
             sample_id, class_ids = image_path.stem, present
             if self.palette == "named":
@@ -264,6 +283,7 @@ def load_dataset(config: dict) -> ADE20KDataset:
         mode=config.get("mode", "hierarchical"),
         palette=config.get("palette", "rino"),
         color_order=config.get("color_order", "area"),
+        max_pixels=config.get("max_pixels"),
         subset=read_subset(config.get("subset_file")),
         max_samples=config.get("max_samples"),
         max_size=tuple(max_size) if isinstance(max_size, (list, tuple)) else max_size,

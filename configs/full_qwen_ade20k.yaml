@@ -1,6 +1,6 @@
 # Full validation split, no subset.
 task_name: ade20k_semseg
-generation_version: full-qwen21-bf16-named-freq-s40 # change whenever model, steps or prompts change
+generation_version: full-qwen21-bf16-named-freq-maxpx-s40 # change whenever model, steps or prompts change
 output_root: ../outputs
 # Empty so the model sees exactly RINO's segmentation prompt.
 system_prompt: ""
@@ -13,6 +13,7 @@ dataset:
     color_order: frequency # colours handed out by dataset-wide class frequency, not this image's GT
     max_samples: null # e.g. 5 for a speed check (keep a separate generation_version)
     max_size: [1024, 1024]
+    max_pixels: 524288 # 1024x512; the 960x960 and 1024x1024 images ran out of memory on a 24 GB A10G
     shrink_mode: scale
     size_multiple: 32 # Qwen-Image 2.1 requires dimensions divisible by 32.
 evaluator:
