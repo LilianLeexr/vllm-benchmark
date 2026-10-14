@@ -100,6 +100,42 @@ Zero-shot results on all 654 NYUv2 test images (one trial, seed 42, 40 steps, 10
 | Qwen-Image-Edit, RINO Table 1 | 0.086 | 0.927 | – | – | – | – | – |
 | Depth Anything V2, RINO Table 1 | 0.045 | 0.979 | – | – | – | – | – |
 
+## Semantic segmentation (Cityscapes, ADE20K)
+
+Zero-shot semantic segmentation on the Cityscapes val split (500 images, 19 classes) and the ADE20K val split (2,000 images, 150 classes), following RINO ([Let RGB Be the Language of Vision](https://arxiv.org/abs/2607.12450)). The prompt assigns a flat colour to each class (`Convert this photo into a color-coded map: the road red, …, and everything else black.`). [`tasks/evaluators/semseg.py`](tasks/evaluators/semseg.py) maps each output pixel to the nearest prompted colour, black meaning no class, and scores the label map at the original ground-truth resolution. [`tasks/aggregators/semseg.py`](tasks/aggregators/semseg.py) computes mIoU, mAcc and aAcc from pixel counts summed over the whole split (not per-image averages), with a 95% bootstrap interval, per-class IoU, RINO's optional refinement (5×5 mode filter, blobs under 100 px removed; `*_refined`), and the fine prediction collapsed to coarse groups (`coarse_fine_*`: 7 for Cityscapes, 10 for ADE20K).
+
+```bash
+bash scripts/download_cityscapes.sh   # needs a free cityscapes-dataset.com account (~11 GB)
+bash scripts/download_ade20k.sh       # ~920 MB, no login
+uv run visionbench run --config full_qwen_cityscapes_all       # all 19 classes in every prompt
+uv run visionbench run --config full_qwen_cityscapes_present   # only classes present in the image
+uv run visionbench run --config full_qwen_ade20k
+```
+
+Prompt protocols. `class_list: present` lists only the classes in each image's ground truth, the protocol of RINO and Liu et al. ([Open-Source Image Editing Models Are Zero-Shot Vision Learners](https://arxiv.org/abs/2605.04566)). It leaks which classes are present. `class_list: all` lists all 19 Cityscapes classes with fixed colours, like Vision Banana ([Image Generators are Generalist Vision Learners](https://arxiv.org/abs/2604.20329)). This is our fine-tuning baseline. ADE20K uses `present`, because 150 colours do not fit in one prompt.
+
+ADE20K palette. RINO's generated 150-colour palette pairs each colour name with an unrelated RGB value (its "orange" is (29, 58, 127)), so the model paints the named colour and is decoded against another. `palette: named` uses 32 colours whose names match their RGB values. They are handed to an image's classes by dataset-wide class frequency (`color_order: frequency`), so the assignment never uses that image's ground truth. RINO's palette and its two-pass coarse-then-fine protocol are still available (`palette: rino`, `mode: hierarchical`).
+
+Implementation checks. A perfect prediction (ground truth painted with the prompted colours) scores 100%. Decoding and refinement match RINO's code pixel for pixel. [`tests/test_semseg.py`](tests/test_semseg.py) covers both datasets with synthetic data. `tasks/subsets/` holds fixed 100-image subsets of each split (seed 0; Cityscapes stratified by city) for quick comparisons, used with `subset_file:`. Regenerate them with `tasks/subsets/make_subsets.py`.
+
+The supplied configs run on a 24 GB A10G (AWS g5.2xlarge): bf16 transformer and VAE on the GPU, text encoder CPU-offloaded, 40 steps. That takes about 33 s per Cityscapes image and 18 s per ADE20K image. `max_pixels: 524288` scales down the two ADE20K images larger than 1024×512 pixels, which otherwise run out of memory. On AWS Deep Learning AMIs, run with `env -u LD_LIBRARY_PATH`, because the system CUDA libraries otherwise break the environment's cuDNN.
+
+Zero-shot results on the full validation splits (one trial, seed 42, 40 steps):
+
+| Dataset, protocol | mIoU (95% CI) | mAcc | aAcc | Coarse-group mIoU |
+|---|---|---|---|---|
+| Cityscapes, all 19 classes listed | **30.5** (29.6–31.3) | 45.6 | 80.9 | 63.6 (7 groups) |
+| Cityscapes, present classes listed | **42.7** (40.6–45.2) | 56.6 | 87.8 | 71.7 (7 groups) |
+| ADE20K, present classes listed | pending | | | (10 groups) |
+
+| Reference (Cityscapes val unless noted) | Protocol | mIoU |
+|---|---|---|
+| Qwen-Image-Edit, Liu et al. Table 4 | present | 25.7 (7 groups: 49.5) |
+| Qwen-Image-Edit, RINO Table 4 | present | 24.3 |
+| Qwen-Image-Edit, ADE20K, RINO Table 5 | present, RINO palette | 12.6 (10 groups: 40.4) |
+| Vision Banana (instruction-tuned, no Cityscapes training data), Table 2 | all | 69.9 |
+| SegMan-L (trained on Cityscapes), Vision Banana Table 2 | — | 84.2 |
+
 ## YAML and credentials
 
 The YAML files are [`configs/config_dummy.yaml`](configs/config_dummy.yaml), [`configs/qwen.yaml`](configs/qwen.yaml), [`configs/openai.yaml`](configs/openai.yaml), [`configs/gemini.yaml`](configs/gemini.yaml), and [`configs/ark.yaml`](configs/ark.yaml). They select explicit model IDs, a multiline system prompt, task files/parameters, trial count, remote concurrency (default 3), retry policy, output root, and S3 archive settings. Local Qwen always runs one generation at a time. Model-specific controls belong under `model.options`; invalid Qwen combinations fail before inference. Model-specific prompt tuning should use a separately labeled run; all main comparisons should use the same task and sample prompts.

@@ -9,10 +9,11 @@ mode: single
     one fine sample per image (150-class prompt).
 palette: rino (default) | named
     named fixes RINO's mismatched colour names; see NAMED_COLOURS.
-color_order: frequency | area (default, for reproducibility)
+color_order: frequency (default) | area
     how named colours are handed out among an image's classes: by dataset-wide
-    class frequency, or by this image's GT areas. area uses GT and is the default
-    only so the finished 100-image named run reproduces; new configs set frequency.
+    class frequency, or by this image's GT areas (area uses GT; avoid it).
+max_pixels: optional cap on processed image area, e.g. 524288 (1024x512) for a
+    24 GB GPU; only the two largest val images are affected.
 mode: hierarchical (RINO --hierarchical, used for its ADE20K numbers)
     two samples per image: ``<id>__coarse`` (10 super-categories) and ``<id>``
     (fine). The aggregator fuses them.
@@ -110,8 +111,10 @@ PROMPT_COLOURS = build_palette()
 
 # palette: named (our fix). RINO's generated palette pairs names with unrelated RGB
 # values (its "orange" is (29, 58, 127)), so the model paints the named colour and is
-# decoded against another. These are CSS colours whose names match their RGB: ten
-# basics first, then greedily the farthest remaining colour in CIELAB. Each image
+# decoded against another. Names follow CSS colour values, except "green" is pure
+# (0, 255, 0) as in RINO's Cityscapes palette (CSS green is (0, 128, 0)) and
+# "dark gray" is (64, 64, 64) (CSS darkgray is lighter than gray). Ten basics
+# first, then greedily the farthest remaining colour in CIELAB. Each image
 # gives its most frequent classes (see color_order) the first entries; images have
 # at most 27 classes.
 NAMED_COLOURS = [
@@ -282,7 +285,7 @@ def load_dataset(config: dict) -> ADE20KDataset:
         Path(config["raw_dir"]),
         mode=config.get("mode", "hierarchical"),
         palette=config.get("palette", "rino"),
-        color_order=config.get("color_order", "area"),
+        color_order=config.get("color_order", "frequency"),
         max_pixels=config.get("max_pixels"),
         subset=read_subset(config.get("subset_file")),
         max_samples=config.get("max_samples"),
