@@ -102,27 +102,19 @@ Zero-shot results on all 654 NYUv2 test images (one trial, seed 42, 40 steps, 10
 
 ## Semantic segmentation (Cityscapes, ADE20K)
 
-Zero-shot semantic segmentation on the Cityscapes val split (500 images, 19 classes) and the ADE20K val split (2,000 images, 150 classes), following RINO ([Let RGB Be the Language of Vision](https://arxiv.org/abs/2607.12450)). The prompt assigns a flat colour to each class (`Convert this photo into a color-coded map: the road red, …, and everything else black.`). [`tasks/evaluators/semseg.py`](tasks/evaluators/semseg.py) maps each output pixel to the nearest prompted colour, black meaning no class, and scores the label map at the original ground-truth resolution. [`tasks/aggregators/semseg.py`](tasks/aggregators/semseg.py) computes mIoU, mAcc and aAcc from pixel counts summed over the whole split (not per-image averages), with a 95% bootstrap interval, per-class IoU, RINO's optional refinement (5×5 mode filter, blobs under 100 px removed; `*_refined`), and the fine prediction collapsed to coarse groups (`coarse_fine_*`: 7 for Cityscapes, 10 for ADE20K).
+`configs/full_qwen_{cityscapes_all,cityscapes_present,ade20k}.yaml` benchmark zero-shot semantic segmentation on Cityscapes val (500 images, 19 classes) and ADE20K val (2,000 images, 150 classes) with the protocol from RINO ([Let RGB Be the Language of Vision](https://arxiv.org/abs/2607.12450)). The prompt assigns a flat colour to each class (`Convert this photo into a color-coded map: the road red, …, and everything else black.`). [`tasks/evaluators/semseg.py`](tasks/evaluators/semseg.py) maps each pixel to the nearest prompted colour (black = no class) and scores at the original ground-truth resolution. [`tasks/aggregators/semseg.py`](tasks/aggregators/semseg.py) computes mIoU, mAcc and aAcc from pixel counts summed over the split, with 95% bootstrap intervals, per-class IoU, RINO's refinement (`*_refined`) and coarse-group scores (`coarse_fine_*`).
 
 ```bash
 bash scripts/download_cityscapes.sh   # needs a free cityscapes-dataset.com account (~11 GB)
 bash scripts/download_ade20k.sh       # ~920 MB, no login
-uv run visionbench run --config full_qwen_cityscapes_all       # all 19 classes in every prompt
-uv run visionbench run --config full_qwen_cityscapes_present   # only classes present in the image
-uv run visionbench run --config full_qwen_ade20k
+uv run visionbench run --config full_qwen_cityscapes_all       # likewise full_qwen_cityscapes_present, full_qwen_ade20k
 ```
 
-Prompt protocols. `class_list: present` lists only the classes in each image's ground truth, the protocol of RINO and Liu et al. ([Open-Source Image Editing Models Are Zero-Shot Vision Learners](https://arxiv.org/abs/2605.04566)). It leaks which classes are present. `class_list: all` lists all 19 Cityscapes classes with fixed colours, like Vision Banana ([Image Generators are Generalist Vision Learners](https://arxiv.org/abs/2604.20329)). This is our fine-tuning baseline. ADE20K uses `present`, because 150 colours do not fit in one prompt.
+`class_list: present` names only the classes in each image's ground truth, as in RINO and Liu et al. ([Open-Source Image Editing Models Are Zero-Shot Vision Learners](https://arxiv.org/abs/2605.04566)). `class_list: all` names all 19 Cityscapes classes, as in Vision Banana ([Image Generators are Generalist Vision Learners](https://arxiv.org/abs/2604.20329)). It does not leak labels and is the fine-tuning baseline. ADE20K uses `present`. RINO's 150-colour ADE20K palette pairs colour names with unrelated RGB values (its "orange" is (29, 58, 127)). `palette: named` uses colours whose names match their RGB, assigned by dataset-wide class frequency. RINO's palette and two-pass mode remain available. "refined" applies RINO's post-processing (5×5 mode filter, blobs under 100 px removed) to the same outputs. A ground-truth-painted prediction scores 100%, and decoding matches RINO's code pixel for pixel. `tasks/subsets/` holds fixed 100-image subsets for quick runs (`subset_file:`). The configs fit a 24 GB A10G with the text encoder CPU-offloaded. `max_pixels` scales down the two ADE20K images that otherwise run out of memory. On AWS Deep Learning AMIs, run with `env -u LD_LIBRARY_PATH`.
 
-ADE20K palette. RINO's generated 150-colour palette pairs each colour name with an unrelated RGB value (its "orange" is (29, 58, 127)), so the model paints the named colour and is decoded against another. `palette: named` uses 32 colours whose names match their RGB values. They are handed to an image's classes by dataset-wide class frequency (`color_order: frequency`), so the assignment never uses that image's ground truth. RINO's palette and its two-pass coarse-then-fine protocol are still available (`palette: rino`, `mode: hierarchical`).
+Results on the full validation splits (one trial, seed 42, 40 steps; one A10G, ~33 s per Cityscapes image and ~18 s per ADE20K image). mIoU 95% intervals: Cityscapes all 29.6–31.3, present 40.6–45.2; ADE20K 36.0–39.4.
 
-Implementation checks. A perfect prediction (ground truth painted with the prompted colours) scores 100%. Decoding and refinement match RINO's code pixel for pixel. [`tests/test_semseg.py`](tests/test_semseg.py) covers both datasets with synthetic data. `tasks/subsets/` holds fixed 100-image subsets of each split (seed 0; Cityscapes stratified by city) for quick comparisons, used with `subset_file:`. Regenerate them with `tasks/subsets/make_subsets.py`.
-
-The supplied configs run on a 24 GB A10G (AWS g5.2xlarge): bf16 transformer and VAE on the GPU, text encoder CPU-offloaded, 40 steps. That takes about 33 s per Cityscapes image and 18 s per ADE20K image. `max_pixels: 524288` scales down the two ADE20K images larger than 1024×512 pixels, which otherwise run out of memory. On AWS Deep Learning AMIs, run with `env -u LD_LIBRARY_PATH`, because the system CUDA libraries otherwise break the environment's cuDNN.
-
-Zero-shot results on the full validation splits (one trial, seed 42, 40 steps). "present" lists only the classes in each image's ground truth (oracle class list, as in Liu et al. and RINO); "all" lists all 19 Cityscapes classes (as in Vision Banana). "refined" adds RINO's post-processing to the decoded label map (5×5 mode filter, then blobs under 100 px removed); it uses the same generated images. RINO refines every editor, so compare its rows with our refined rows; Liu et al. do not refine. "Training" says what segmentation or vision training each model had; all rows except SegMan-L are zero-shot on the evaluated dataset. Our mIoU 95% intervals: Cityscapes all 29.6–31.3, present 40.6–45.2; ADE20K 36.0–39.4.
-
-Cityscapes val (500 images, 19 classes):
+Cityscapes val (500 images):
 
 | Model | Training | Protocol | mIoU ↑ | mAcc ↑ | aAcc ↑ | 7-group mIoU ↑ |
 |---|---|---|---|---|---|---|
@@ -137,8 +129,6 @@ Cityscapes val (500 images, 19 classes):
 | Vision Banana, Table 2 | vision instruction tuning, no Cityscapes | all | 69.9 | – | – | – |
 | SegMan-L, Vision Banana Table 2 | trained on Cityscapes (upper reference) | – | 84.2 | – | – | – |
 
-Liu et al. report pixel accuracy, listed under aAcc.
-
 ADE20K val (2,000 images):
 
 | Model | Training | Palette | 150-class mIoU ↑ | mAcc ↑ | aAcc ↑ | 10-group mIoU ↑ | mAcc ↑ | aAcc ↑ |
@@ -149,14 +139,7 @@ ADE20K val (2,000 images):
 | FC-CLIP, RINO Table 5 | segmentation training on other data, no ADE20K | – | 34.1 | 40.9 | 59.6 | 42.2 | 53.1 | 67.1 |
 | MaskCLIP, RINO Table 5 | CLIP-based, no ADE20K training | – | 23.8 | 31.5 | 50.3 | 39.3 | 50.5 | 65.7 |
 
-Our 10-group scores collapse the single 150-class prediction into RINO's groups; RINO prompts a separate 10-group pass. FC-CLIP and MaskCLIP do not receive the per-image class list, so the editors' present-protocol rows are not a like-for-like comparison with them.
-
-How the papers' conclusions hold up here:
-
-- Zero-shot editors trail tuned and specialist models (Liu et al., RINO). Still true. With all 19 classes listed, Cityscapes reaches 30.5 against 69.9 for Vision Banana and 65.2 for SAM 3. Even with the oracle class list (42.7) it stays below FC-CLIP (56.3).
-- Errors are mostly category assignment, not localisation (Liu et al.). Confirmed. Removing the oracle class list costs 12 mIoU on Cityscapes, and the same predictions grouped into 7 categories score 63.6–71.7. Vehicles drop the most (bus 65.6 → 21.4, train 30.3 → 0.1), while road barely changes (94.9 → 93.5).
-- Coarse labels are far easier than fine ones (Liu et al. 7 vs 19 classes; RINO 10 vs 150). Holds, but the ADE20K gap is smaller than RINO reports (55.6 vs 37.5, against 40.4 vs 12.6). Most of RINO's 150-class deficit comes from its mismatched palette.
-- Newer editor, much higher zero-shot scores. Under the papers' own protocol, Qwen-Image 2.1 beats the published Qwen-Image-Edit numbers by about 17–19 mIoU on Cityscapes and by about 25 on ADE20K (150 classes). The ADE20K gap also includes the palette fix.
+Liu et al. report pixel accuracy, listed under aAcc. Our 10-group scores collapse the 150-class prediction; RINO prompts a separate 10-group pass. FC-CLIP and MaskCLIP do not receive the per-image class list. No generation or scoring failures occurred.
 
 ## YAML and credentials
 
