@@ -120,21 +120,43 @@ Implementation checks. A perfect prediction (ground truth painted with the promp
 
 The supplied configs run on a 24 GB A10G (AWS g5.2xlarge): bf16 transformer and VAE on the GPU, text encoder CPU-offloaded, 40 steps. That takes about 33 s per Cityscapes image and 18 s per ADE20K image. `max_pixels: 524288` scales down the two ADE20K images larger than 1024×512 pixels, which otherwise run out of memory. On AWS Deep Learning AMIs, run with `env -u LD_LIBRARY_PATH`, because the system CUDA libraries otherwise break the environment's cuDNN.
 
-Zero-shot results on the full validation splits (one trial, seed 42, 40 steps):
+Zero-shot results on the full validation splits (one trial, seed 42, 40 steps). "present" lists only the classes in each image's ground truth (oracle class list, as in Liu et al. and RINO); "all" lists all 19 Cityscapes classes (as in Vision Banana). RINO applies its refinement to every editor, so the matching row here is the refined one. Our mIoU 95% intervals: Cityscapes all 29.6–31.3, present 40.6–45.2; ADE20K 36.0–39.4.
 
-| Dataset, protocol | mIoU (95% CI) | mAcc | aAcc | Coarse-group mIoU |
-|---|---|---|---|---|
-| Cityscapes, all 19 classes listed | **30.5** (29.6–31.3) | 45.6 | 80.9 | 63.6 (7 groups) |
-| Cityscapes, present classes listed | **42.7** (40.6–45.2) | 56.6 | 87.8 | 71.7 (7 groups) |
-| ADE20K, present classes listed, named palette | **37.5** (36.0–39.4) | 53.4 | 67.6 | 55.6 (10 groups) |
+**Cityscapes val (500 images, 19 classes)**
 
-| Reference (Cityscapes val unless noted) | Protocol | mIoU |
-|---|---|---|
-| Qwen-Image-Edit, Liu et al. Table 4 | present | 25.7 (7 groups: 49.5) |
-| Qwen-Image-Edit, RINO Table 4 | present | 24.3 |
-| Qwen-Image-Edit, ADE20K, RINO Table 5 | present, RINO palette | 12.6 (10 groups: 40.4) |
-| Vision Banana (instruction-tuned, no Cityscapes training data), Table 2 | all | 69.9 |
-| SegMan-L (trained on Cityscapes), Vision Banana Table 2 | — | 84.2 |
+| Model | Protocol | mIoU ↑ | mAcc ↑ | aAcc ↑ | 7-group mIoU ↑ |
+|---|---|---|---|---|---|
+| Qwen-Image 2.1 (`790c926`), this repo | present | 42.7 | 56.6 | 87.8 | 71.7 |
+| Qwen-Image 2.1, this repo, refined | present | 43.3 | 56.4 | 88.1 | 72.1 |
+| Qwen-Image 2.1, this repo | all | 30.5 | 45.6 | 80.9 | 63.6 |
+| Qwen-Image 2.1, this repo, refined | all | 30.9 | 45.7 | 81.3 | 64.3 |
+| Qwen-Image-Edit, Liu et al. Table 4 | present | 25.7 | – | 55.4 | 49.5 |
+| Qwen-Image-Edit, RINO Table 4 | present, refined | 24.3 | 44.4 | 66.6 | – |
+| FC-CLIP (open-vocabulary segmenter), RINO Table 4 | – | 56.3 | 65.4 | 78.5 | – |
+| SAM 3, Vision Banana Table 2 | – | 65.2 | – | – | – |
+| Vision Banana (instruction-tuned, no Cityscapes data), Table 2 | all | 69.9 | – | – | – |
+| SegMan-L (trained on Cityscapes), Vision Banana Table 2 | – | 84.2 | – | – | – |
+
+Liu et al. report pixel accuracy, listed under aAcc.
+
+**ADE20K val (2,000 images)**
+
+| Model | Palette | 150-class mIoU ↑ | mAcc ↑ | aAcc ↑ | 10-group mIoU ↑ | mAcc ↑ | aAcc ↑ |
+|---|---|---|---|---|---|---|---|
+| Qwen-Image 2.1 (`790c926`), this repo | named | 37.5 | 53.4 | 67.6 | 55.6 | 69.6 | 72.9 |
+| Qwen-Image 2.1, this repo, refined | named | 38.7 | 54.5 | 70.3 | 56.9 | 71.6 | 76.7 |
+| Qwen-Image-Edit, RINO Table 5 | RINO | 12.6 | 20.9 | 44.9 | 40.4 | 53.5 | 67.4 |
+| FC-CLIP (open-vocabulary segmenter), RINO Table 5 | – | 34.1 | 40.9 | 59.6 | 42.2 | 53.1 | 67.1 |
+| MaskCLIP, RINO Table 5 | – | 23.8 | 31.5 | 50.3 | 39.3 | 50.5 | 65.7 |
+
+Our 10-group scores collapse the single 150-class prediction into RINO's groups; RINO prompts a separate 10-group pass. FC-CLIP and MaskCLIP do not receive the per-image class list, so the editors' present-protocol rows are not a like-for-like comparison with them.
+
+How the papers' conclusions hold up here:
+
+- **Zero-shot editors trail tuned and specialist models** (Liu et al., RINO). Still true. With all 19 classes listed, Cityscapes reaches 30.5 against 69.9 for Vision Banana and 65.2 for SAM 3. Even with the oracle class list (42.7) it stays below FC-CLIP (56.3).
+- **Errors are mostly category assignment, not localisation** (Liu et al.). Confirmed. Removing the oracle class list costs 12 mIoU on Cityscapes, and the same predictions grouped into 7 categories score 63.6–71.7. Vehicles drop the most (bus 65.6 → 21.4, train 30.3 → 0.1), while road barely changes (94.9 → 93.5).
+- **Coarse labels are far easier than fine ones** (Liu et al. 7 vs 19 classes; RINO 10 vs 150). Holds, but the ADE20K gap is smaller than RINO reports (55.6 vs 37.5, against 40.4 vs 12.6). Most of RINO's 150-class deficit comes from its mismatched palette.
+- **Newer editor, much higher zero-shot scores.** Under the papers' own protocol, Qwen-Image 2.1 beats the published Qwen-Image-Edit numbers by about 17–19 mIoU on Cityscapes and by about 25 on ADE20K (150 classes). The ADE20K gap also includes the palette fix.
 
 ## YAML and credentials
 
