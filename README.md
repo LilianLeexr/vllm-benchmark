@@ -126,7 +126,7 @@ Zero-shot results on the full validation splits (one trial, seed 42, 40 steps):
 |---|---|---|---|---|
 | Cityscapes, all 19 classes listed | **30.5** (29.6–31.3) | 45.6 | 80.9 | 63.6 (7 groups) |
 | Cityscapes, present classes listed | **42.7** (40.6–45.2) | 56.6 | 87.8 | 71.7 (7 groups) |
-| ADE20K, present classes listed | pending | | | (10 groups) |
+| ADE20K, present classes listed, named palette | **37.5** (36.0–39.4) | 53.4 | 67.6 | 55.6 (10 groups) |
 
 | Reference (Cityscapes val unless noted) | Protocol | mIoU |
 |---|---|---|
