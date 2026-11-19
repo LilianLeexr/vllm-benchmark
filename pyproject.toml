@@ -23,6 +23,7 @@ dependencies = [
   "transformers>=5.17",
   "torchvision>=0.29.0",
   "scipy>=1.17.1",
+  "h5py>=3.16.0",
 ]
 
 [project.scripts]

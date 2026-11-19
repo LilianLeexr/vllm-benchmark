@@ -1,0 +1,36 @@
+# Union fine-tuning data: defaults match our evaluators' preprocessing, prompts and encodings.
+# Override any key with your own YAML or dict: FinetuneDataset({"tasks": {"depth": {"enabled": false}}}).
+
+root: data/finetune_canonical   # canonical store built by finetune_data.sources.*
+splits: [train]                  # train | val (held out from train, for checkpoint selection) | test
+seed: 0
+
+sources:                         # weight: share within each task (before dividing by the source's size)
+  nyuv2: {enabled: true, weight: 1.0}
+
+size:                            # default geometry, overridable per task under tasks.<task>.size
+  max_size: [1024, 1024]
+  max_area: null
+  upscale_long_side: null
+  size_multiple: 32              # Qwen-Image 2.1 needs sides divisible by 32
+
+tasks:                           # weight: share of samples drawn for this task
+  segmentation:
+    enabled: true
+    weight: 1.0
+    class_list: all              # all = every class of the label space (Vision Banana; our fine-tuning baseline) | present
+    colour_format: name          # name | rgb | hex
+    template: null               # default: our segmentation eval prompt
+    size: {max_area: 524288}     # as in our Cityscapes / ADE20K configs (area <= 1024x512)
+  depth:
+    enabled: true
+    weight: 1.0
+    encoding: disparity          # disparity (matches the depth evaluator's main metrics) | linear
+    percentiles: [1.0, 99.0]     # per-image normalisation range
+    instruction: null            # default: the depth eval prompt
+    size: {upscale_long_side: 1024}   # as in configs/qwen_nyuv2_depth.yaml (640x480 -> 1024x768)
+  normals:
+    enabled: true                # used only by sources that provide normals
+    weight: 1.0
+    instruction: null            # default: the normals eval system prompt + prompt
+    size: {}                     # as in configs/qwen_normal_*.yaml (native size, max 1024)
