@@ -9,4 +9,5 @@ dist/
 *.pyc
 
 assets/
-raw/data/
+raw/
+data/
