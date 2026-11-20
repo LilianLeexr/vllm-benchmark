@@ -160,3 +160,21 @@ def test_depth_units_and_two_source_balance(tmp_path):
     vk_item = next(ds[i] for i in range(len(ds)) if ds.items[i][0] == "vkitti2")
     assert vk_item["input"].size == (1024, 288)  # long side capped at 1024 like the eval configs, then multiples of 32
     assert vk_item["instruction"].count(", the ") == 9  # 10 VKITTI2 classes, never unannotated Cityscapes ones
+
+
+def test_vkitti2_sky_depth_becomes_invalid(tmp_path):
+    vk = load_module(Path(__file__).resolve().parents[1] / "finetune_data" / "sources" / "vkitti2.py")
+    frames = tmp_path / "raw" / "Scene01" / "clone" / "frames"
+    (tmp_path / "raw" / "Scene01" / "clone").mkdir(parents=True)
+    (tmp_path / "raw" / "Scene01" / "clone" / "colors.txt").write_text("Category r g b\nSky 90 200 255\nRoad 100 60 100\n")
+    for sub in ("rgb", "classSegmentation", "depth"):
+        (frames / sub / "Camera_0").mkdir(parents=True)
+    Image.fromarray(np.zeros((4, 6, 3), np.uint8)).save(frames / "rgb" / "Camera_0" / "rgb_00000.jpg")
+    seg = np.zeros((4, 6, 3), np.uint8); seg[:2] = (90, 200, 255); seg[2:] = (100, 60, 100)
+    Image.fromarray(seg).save(frames / "classSegmentation" / "Camera_0" / "classgt_00000.png")
+    depth = np.full((4, 6), 1500, np.uint16); depth[:2] = vk.SKY_DEPTH
+    Image.fromarray(depth).save(frames / "depth" / "Camera_0" / "depth_00000.png")
+    rows = vk.build(tmp_path / "raw", tmp_path / "out", test_scene="Scene99", val_count=0)
+    assert [r["split"] for r in rows] == ["train"]
+    stored = store.load_depth(tmp_path / "out" / "vkitti2" / rows[0]["depth"], 100.0)
+    assert np.all(stored[:2] == 0) and np.allclose(stored[2:], 15.0)  # sky invalid, 15 m kept

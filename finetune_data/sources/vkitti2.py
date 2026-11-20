@@ -6,8 +6,9 @@ Input: raw/vkitti2/ from scripts/download_vkitti2.sh (Camera_0, six variations, 
   Tree and Vegetation -> vegetation, Van -> car (as in Cityscapes). GuardRail and Misc
   become void, like Cityscapes' ignored guard-rail class. The label space ("vkitti2")
   lists only these 10 classes, so prompts never name a class VKITTI2 does not annotate.
-- Depth is kept as the original uint16 centimetres (sky = 655.35 m); meta records 100 units per metre.
-- Splits: one whole scene (default Scene20) is "test", so near-identical neighbouring frames
+- Depth is kept as the original uint16 centimetres; meta records 100 units per metre. Sky
+  (stored by VKITTI2 as 65535 = 655.35 m) is marked invalid (0), as the evaluators mask it anyway.
+- Splits: one whole scene (default Scene02, the shortest) is "test", so near-identical neighbouring frames
   cannot leak across splits. Frames are subsampled with `stride`; `val_count` frames of the
   training scenes are held out as "val" for checkpoint selection (they come from the same
   scenes as train, so val tracks fitting rather than generalisation).
@@ -19,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import random
-import shutil
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +28,7 @@ from PIL import Image
 from finetune_data import palette, store
 
 SOURCE = "vkitti2"
+SKY_DEPTH = 65535  # VKITTI2's depth value for sky / infinity (cm)
 VARIATIONS = ["clone", "fog", "morning", "overcast", "rain", "sunset"]
 CLASS_MAP = {  # VKITTI2 category -> our class name (None = void)
     "Terrain": "terrain", "Sky": "sky", "Tree": "vegetation", "Vegetation": "vegetation",
@@ -65,7 +66,7 @@ def to_label(classgt: np.ndarray, lut: dict[int, int]) -> np.ndarray:
     return label
 
 
-def build(raw_dir: Path, out_root: Path, *, test_scene: str = "Scene20", stride: int = 10,
+def build(raw_dir: Path, out_root: Path, *, test_scene: str = "Scene02", stride: int = 5,
           variations: list[str] | None = None, val_count: int = 50, seed: int = 0,
           limit: int | None = None) -> list[dict]:
     raw_dir, out = Path(raw_dir), Path(out_root) / SOURCE
@@ -92,9 +93,12 @@ def build(raw_dir: Path, out_root: Path, *, test_scene: str = "Scene20", stride:
             store.save_image(out / "images" / f"{sample_id}.png", np.asarray(image.convert("RGB")))
         with Image.open(base / "classSegmentation" / "Camera_0" / f"classgt_{number:05d}.png") as image:
             store.save_label(out / "seg" / f"{sample_id}.png", to_label(np.asarray(image.convert("RGB")), lut))
+        with Image.open(base / "depth" / "Camera_0" / f"depth_{number:05d}.png") as image:
+            depth_cm = np.array(image, dtype=np.uint16)
+        depth_cm[depth_cm == SKY_DEPTH] = 0  # sky -> invalid
         depth_path = out / "depth" / f"{sample_id}.png"
         depth_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(base / "depth" / "Camera_0" / f"depth_{number:05d}.png", depth_path)  # uint16 cm
+        Image.fromarray(depth_cm).save(depth_path)
         split = "test" if scene == test_scene else ("val" if (scene, variation, number) in val else "train")
         rows.append({"id": sample_id, "source": SOURCE, "split": split, "scene": scene, "variation": variation,
                      "frame": number, "image": f"images/{sample_id}.png", "seg": f"seg/{sample_id}.png",
@@ -104,7 +108,7 @@ def build(raw_dir: Path, out_root: Path, *, test_scene: str = "Scene20", stride:
         "source": SOURCE, "label_space": "vkitti2", "tasks": ["segmentation", "depth"], "depth_units_per_m": 100.0,
         "test_scene": test_scene, "stride": stride, "variations": variations, "camera": "Camera_0",
         "val_seed": seed, "splits": {s: sum(r["split"] == s for r in rows) for s in ("train", "val", "test")},
-        "notes": "Classes mapped to Cityscapes names; GuardRail/Misc void; Van -> car; depth in cm.",
+        "notes": "Classes mapped to Cityscapes names; GuardRail/Misc void; Van -> car; depth in cm, sky = 0 (invalid).",
     })
     return rows
 
@@ -113,8 +117,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("raw_dir", type=Path)
     parser.add_argument("out_root", type=Path)
-    parser.add_argument("--test-scene", default="Scene20")
-    parser.add_argument("--stride", type=int, default=10, help="keep frames whose number is a multiple of this")
+    parser.add_argument("--test-scene", default="Scene02")
+    parser.add_argument("--stride", type=int, default=5, help="keep frames whose number is a multiple of this")
     parser.add_argument("--variations", nargs="+", default=None)
     parser.add_argument("--val-count", type=int, default=50)
     parser.add_argument("--seed", type=int, default=0)

@@ -69,11 +69,13 @@ colours of the Cityscapes evaluator. Regenerate it with `python -m finetune_data
 | Source | Tasks | Splits | Notes |
 |---|---|---|---|
 | `nyuv2` | segmentation (NYU-40), depth | 745 train / 50 val / 654 test | official labeled set; test = the Eigen split our evaluators use |
-| `vkitti2` | segmentation (10 Cityscapes classes), depth | 730 train / 50 val / 504 test | Camera_0, 6 weather variations, every 10th frame; test = all of Scene20; depth in cm (sky = 655.35 m) |
+| `vkitti2` | segmentation (10 Cityscapes classes), depth | 2230 train / 50 val / 282 test | Camera_0, 6 weather variations, every 5th frame; test = all of Scene02 (shortest scene); depth in cm, sky invalid |
 
 VKITTI2 classes are mapped to Cityscapes names and colours (Tree/Vegetation -> vegetation,
 Van -> car, GuardRail/Misc -> void). Change the test scene or frame stride with
-`--test-scene` / `--stride` (frames ending in 0 or 5 are downloaded, so `--stride 5` doubles the data).
+`--test-scene` / `--stride` (only frames ending in 0 or 5 are downloaded, so the stride must be a multiple of 5).
+Val frames come from the training scenes: use them for checkpoint selection, and test / out-of-domain sets for generalisation.
+When evaluating VKITTI2 depth use `max_depth: 80` (KITTI convention), not NYU's 10 m.
 
 Not yet added: Hypersim (normals), COCO train2017 (pose).
 Cityscapes and ADE20K train splits are deliberately excluded so segmentation results stay
