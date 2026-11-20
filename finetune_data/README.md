@@ -64,6 +64,28 @@ uv run python -m finetune_data.export data/finetune_export --splits train
 label space, a colour name always means one RGB value, and Cityscapes classes keep the exact
 colours of the Cityscapes evaluator. Regenerate it with `python -m finetune_data.palette`.
 
+## In-domain evaluation
+
+The in-domain test splits are read straight from the canonical store, with the training
+renderer's geometry, prompts and colours (`tasks/dataloaders/finetune_semseg.py`, `finetune_depth.py`):
+
+| Config | Test set | Notes |
+|---|---|---|
+| `configs/indomain_nyuv2_semseg_{present,all}.yaml` | NYUv2 test, 654 images, 40 classes | `present` = RINO, `all` = Vision Banana / training default |
+| `configs/indomain_vkitti2_semseg_{present,all}.yaml` | VKITTI2 Scene02, 282 images, 10 classes | |
+| `configs/indomain_vkitti2_depth.yaml` | VKITTI2 Scene02 | `max_depth: 80`, no Eigen crop |
+| `configs/qwen_nyuv2_depth.yaml` (existing) | NYUv2 test, 654 images | same images; raw sensor depth, Marigold protocol |
+
+```bash
+uv run visionbench run --config configs/indomain_vkitti2_depth.yaml
+```
+
+Set a new `generation_version` for every model or checkpoint. Scores are computed at the
+original resolution, so even a perfect prediction at the 1024-wide model resolution loses a
+little at class / depth boundaries on VKITTI2 (oracle: mIoU 0.94, AbsRel 0.03); NYUv2 is not
+resized for segmentation (oracle mIoU 1.0). Out-of-domain sets keep their existing configs
+(Cityscapes, ADE20K, iBims / DIODE).
+
 ## Sources
 
 | Source | Tasks | Splits | Notes |

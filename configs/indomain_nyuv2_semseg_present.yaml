@@ -1,0 +1,51 @@
+# In-domain test: nyuv2 test split from the fine-tuning canonical store (finetune_data/README.md).
+# Same images, prompts, colours and sizes as the training data; scored like Cityscapes (RINO).
+task_name: nyuv2_semseg
+generation_version: zeroshot-qwen21-bf16-present-s40 # change for every new model / checkpoint
+output_root: ../outputs
+system_prompt: "" # the RINO segmentation prompt is the whole instruction
+dataset:
+  path: finetune_semseg.py
+  params:
+    store_root: data/finetune_canonical
+    source: nyuv2
+    split: test
+    class_list: present # present = RINO (GT classes only); all = Vision Banana (every class, the training default)
+    colour_format: name
+    max_samples: null # e.g. 5 for a speed check (keep a separate generation_version)
+    max_size: [1024, 1024]
+    max_area: 524288
+    size_multiple: 32
+evaluator:
+  path: semseg.py
+  params:
+    decode_space: rgb
+aggregator:
+  path: semseg.py
+  params:
+    decode_space: rgb
+    refine: true
+    refine_window: 5
+    refine_min_area: 100
+model:
+  backend: qwen
+  id: Qwen/Qwen-Image-2.1
+  revision: 790c92633540aa0cb11d9abf19eb46d861714758
+  cache_dir: ../model-cache
+  profile: custom # A10G 24 GB: bf16 transformer and VAE on the GPU; the 17 GB text encoder is CPU-offloaded
+  options:
+    transformer_precision: bf16
+    text_encoder_precision: bf16
+    text_encoder_cpu_offload: true
+    vae_precision: bf16
+    num_inference_steps: 40 # same as the papers and the team's other tasks
+trials: 1
+base_seed: 42
+concurrency: 1
+retries:
+  max_attempts: 3
+  base_delay_s: 1
+  max_delay_s: 30
+save_inputs: true
+s3:
+  enabled: false

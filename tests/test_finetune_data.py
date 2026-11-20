@@ -178,3 +178,33 @@ def test_vkitti2_sky_depth_becomes_invalid(tmp_path):
     assert [r["split"] for r in rows] == ["train"]
     stored = store.load_depth(tmp_path / "out" / "vkitti2" / rows[0]["depth"], 100.0)
     assert np.all(stored[:2] == 0) and np.allclose(stored[2:], 15.0)  # sky invalid, 15 m kept
+
+
+def test_indomain_eval_loaders_score_training_targets_perfectly(tmp_path):
+    """The in-domain test loaders and the training renderer agree on images, prompts, colours and sizes."""
+    _write_source(tmp_path / "store")
+    rows = store.read_manifest(tmp_path / "store" / "nyuv2")
+    for row in rows:
+        row["split"] = "test"
+    store.write_manifest(tmp_path / "store" / "nyuv2", rows)
+    seg_loader = load_module(TASKS / "dataloaders" / "finetune_semseg.py")
+    seg_loader.fs.REPO_ROOT = tmp_path
+    train = FinetuneDataset({"root": str(tmp_path / "store"), "splits": ["test"], "sources": NYU_ONLY,
+                             "tasks": {"depth": {"enabled": False}}})
+    for class_list in ("present", "all"):
+        sample = seg_loader.load_dataset({"store_root": "store", "source": "nyuv2", "class_list": class_list})[0]
+        item = next(train[i] for i in range(len(train)) if train.items[i][1]["id"] == sample.sample_id)
+        assert sample.image.size == item["target"].size
+        assert semseg.score(item["target"], sample, {})["pixel_acc"] == 1.0
+        if class_list == "all":
+            assert sample.prompt == item["instruction"]  # identical to the training instruction
+
+    depth_loader = load_module(TASKS / "dataloaders" / "finetune_depth.py")
+    depth_loader.fs.REPO_ROOT = tmp_path
+    sample = depth_loader.load_dataset({"store_root": "store", "source": "nyuv2"})[0]
+    train = FinetuneDataset({"root": str(tmp_path / "store"), "splits": ["test"], "sources": NYU_ONLY,
+                             "tasks": {"segmentation": {"enabled": False}, "depth": {"percentiles": [0, 100]}}})
+    item = next(train[i] for i in range(len(train)) if train.items[i][1]["id"] == sample.sample_id)
+    assert sample.prompt == item["instruction"] and sample.image.size == item["target"].size == (1024, 768)
+    scores = depth_eval.score(item["target"], sample, {"eigen_crop": False})
+    assert scores["abs_rel"] < 0.02

@@ -1,0 +1,45 @@
+# In-domain test: VKITTI2 held-out scene (Scene02) depth from the fine-tuning canonical store.
+# Same protocol as qwen_nyuv2_depth.yaml (RINO prompt, luminance, disparity-space affine fit)
+# with KITTI's 80 m cap and no Eigen crop (that crop is NYU-specific). Sky is invalid in the store.
+# NYUv2 in-domain depth: use configs/qwen_nyuv2_depth.yaml (same 654 test images, raw sensor depth).
+task_name: vkitti2_depth
+generation_version: zeroshot-qwen21-bf16-s40 # change for every new model / checkpoint
+output_root: ../outputs
+system_prompt: ""
+dataset:
+  path: finetune_depth.py
+  params:
+    store_root: data/finetune_canonical
+    source: vkitti2
+    split: test
+    max_samples: null
+    upscale_long_side: 1024 # training depth geometry: 1242x375 -> 1024x288
+    size_multiple: 32
+evaluator:
+  path: nyuv2_depth.py
+  params:
+    min_depth: 0.001
+    max_depth: 80.0
+    eigen_crop: false
+model:
+  backend: qwen
+  id: Qwen/Qwen-Image-2.1
+  revision: 790c92633540aa0cb11d9abf19eb46d861714758
+  cache_dir: ../model-cache
+  profile: custom # A10G 24 GB: bf16 transformer and VAE on the GPU; the 17 GB text encoder is CPU-offloaded
+  options:
+    transformer_precision: bf16
+    text_encoder_precision: bf16
+    text_encoder_cpu_offload: true
+    vae_precision: bf16
+    num_inference_steps: 40 # same as the papers and the team's other tasks
+trials: 1
+base_seed: 42
+concurrency: 1
+retries:
+  max_attempts: 3
+  base_delay_s: 1
+  max_delay_s: 30
+save_inputs: true
+s3:
+  enabled: false
