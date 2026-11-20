@@ -18,6 +18,8 @@ is scored by the existing benchmark configs exactly like the zero-shot baseline.
 ```bash
 bash scripts/download_nyuv2_train.sh                                   # ~2.8 GB -> raw/nyuv2_train/
 uv run python -m finetune_data.sources.nyuv2 raw/nyuv2_train data/finetune_canonical
+bash scripts/download_vkitti2.sh                                       # ~17 GB downloaded, ~1 GB kept -> raw/vkitti2/
+uv run python -m finetune_data.sources.vkitti2 raw/vkitti2 data/finetune_canonical
 ```
 
 ## Use
@@ -67,7 +69,12 @@ colours of the Cityscapes evaluator. Regenerate it with `python -m finetune_data
 | Source | Tasks | Splits | Notes |
 |---|---|---|---|
 | `nyuv2` | segmentation (NYU-40), depth | 745 train / 50 val / 654 test | official labeled set; test = the Eigen split our evaluators use |
+| `vkitti2` | segmentation (10 Cityscapes classes), depth | 730 train / 50 val / 504 test | Camera_0, 6 weather variations, every 10th frame; test = all of Scene20; depth in cm (sky = 655.35 m) |
 
-Not yet added: Virtual KITTI 2 (segmentation, depth), Hypersim (normals), COCO train2017 (pose).
+VKITTI2 classes are mapped to Cityscapes names and colours (Tree/Vegetation -> vegetation,
+Van -> car, GuardRail/Misc -> void). Change the test scene or frame stride with
+`--test-scene` / `--stride` (frames ending in 0 or 5 are downloaded, so `--stride 5` doubles the data).
+
+Not yet added: Hypersim (normals), COCO train2017 (pose).
 Cityscapes and ADE20K train splits are deliberately excluded so segmentation results stay
 comparable to the zero-shot baseline and Vision Banana.

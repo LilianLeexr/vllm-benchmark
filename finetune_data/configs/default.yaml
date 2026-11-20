@@ -7,6 +7,7 @@ seed: 0
 
 sources:                         # weight: share within each task (before dividing by the source's size)
   nyuv2: {enabled: true, weight: 1.0}
+  vkitti2: {enabled: true, weight: 1.0}
 
 size:                            # default geometry, overridable per task under tasks.<task>.size
   max_size: [1024, 1024]

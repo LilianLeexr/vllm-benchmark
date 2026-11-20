@@ -17,6 +17,13 @@ normal_eval = load_module(TASKS / "evaluators" / "surface_normal.py")
 cityscapes = load_module(TASKS / "dataloaders" / "cityscapes.py")
 
 
+NYU_ONLY = {"vkitti2": {"enabled": False}}
+
+
+def _cfg(root: Path, **extra) -> dict:
+    return {"root": str(root), "sources": NYU_ONLY, **extra}
+
+
 def _write_source(root: Path, n: int = 4, size=(640, 480)) -> None:
     """A tiny canonical NYU-like source: segmentation (nyu40) + depth."""
     out = root / "nyuv2"
@@ -89,7 +96,7 @@ def test_geometry_matches_eval_preprocessing():
 
 def test_dataset_renders_triplets_and_balances_sampling(tmp_path):
     _write_source(tmp_path)
-    ds = FinetuneDataset({"root": str(tmp_path)})
+    ds = FinetuneDataset(_cfg(tmp_path))
     assert ds.counts() == {("segmentation", "nyuv2"): 3, ("depth", "nyuv2"): 3}
     seg = next(ds[i] for i in range(len(ds)) if ds[i]["task"] == "segmentation")
     assert seg["input"].size == seg["target"].size == (640, 480)
@@ -98,17 +105,58 @@ def test_dataset_renders_triplets_and_balances_sampling(tmp_path):
     assert dep["input"].size == dep["target"].size == (1024, 768)
     assert np.isclose(ds.sample_weights().sum(), 1.0)
 
-    weighted = FinetuneDataset({"root": str(tmp_path), "tasks": {"depth": {"weight": 3.0}}})
+    weighted = FinetuneDataset(_cfg(tmp_path, tasks={"depth": {"weight": 3.0}}))
     tasks = [weighted.items[i][2] for i in weighted.sample_indices(4000, seed=1)]
     assert 0.70 < tasks.count("depth") / len(tasks) < 0.80
 
-    present = FinetuneDataset({"root": str(tmp_path), "tasks": {"segmentation": {"class_list": "present"},
-                                                                "depth": {"enabled": False}}})
+    present = FinetuneDataset(_cfg(tmp_path, tasks={"segmentation": {"class_list": "present"},
+                                                                "depth": {"enabled": False}}))
     assert all(item[2] == "segmentation" for item in present.items)
     assert present[0]["instruction"].count(", the ") < 39
 
 
 def test_splits_are_respected(tmp_path):
     _write_source(tmp_path)
-    assert {row["split"] for _, row, _ in FinetuneDataset({"root": str(tmp_path)}).items} == {"train"}
-    assert {row["split"] for _, row, _ in FinetuneDataset({"root": str(tmp_path), "splits": ["val"]}).items} == {"val"}
+    assert {row["split"] for _, row, _ in FinetuneDataset(_cfg(tmp_path)).items} == {"train"}
+    assert {row["split"] for _, row, _ in FinetuneDataset(_cfg(tmp_path, splits=["val"])).items} == {"val"}
+    with pytest.raises(FileNotFoundError, match="vkitti2"):
+        FinetuneDataset({"root": str(tmp_path)})  # enabled by default but not built
+
+
+def test_vkitti2_classes_map_to_cityscapes_names_and_colours():
+    vk = load_module(Path(__file__).resolve().parents[1] / "finetune_data" / "sources" / "vkitti2.py")
+    colors = {(90, 200, 255): "Sky", (0, 199, 0): "Tree", (90, 240, 0): "Vegetation", (0, 139, 139): "Van",
+              (255, 127, 80): "Car", (250, 100, 255): "GuardRail", (0, 0, 0): "Undefined"}
+    lut = vk.colour_lut(colors)
+    classgt = np.array([[c for c in colors]], dtype=np.uint8)  # one pixel per colour
+    names = {i: c for i, (c, _, _) in enumerate(palette.load_palette("vkitti2"), start=1)}
+    got = [names.get(int(i)) for i in vk.to_label(classgt, lut)[0]]
+    assert got == ["sky", "vegetation", "vegetation", "car", "car", None, None]
+    cs = {c: rgb for c, _, rgb in palette.load_palette("cityscapes19")}
+    assert all(cs[c] == rgb for c, _, rgb in palette.load_palette("vkitti2"))  # same colours as the Cityscapes eval
+    with pytest.raises(ValueError, match="missing"):
+        vk.to_label(np.array([[[1, 2, 3]]], dtype=np.uint8), lut)
+
+
+def test_depth_units_and_two_source_balance(tmp_path):
+    _write_source(tmp_path, n=4)
+    out = tmp_path / "vkitti2"
+    rows = []
+    for i in range(12):  # a larger second source, depth stored in centimetres
+        sid = f"vkitti2_{i}"
+        store.save_image(out / "images" / f"{sid}.png", np.zeros((375, 1242, 3)))
+        store.save_label(out / "seg" / f"{sid}.png", np.ones((375, 1242)))
+        store.save_depth(out / "depth" / f"{sid}.png", np.full((375, 1242), 300.0), units_per_m=100.0)
+        rows.append({"id": sid, "source": "vkitti2", "split": "train", "image": f"images/{sid}.png",
+                     "seg": f"seg/{sid}.png", "depth": f"depth/{sid}.png"})
+    store.write_manifest(out, rows)
+    store.write_meta(out, {"source": "vkitti2", "label_space": "vkitti2", "depth_units_per_m": 100.0})
+    assert np.allclose(store.load_depth(out / "depth" / "vkitti2_0.png", 100.0), 300.0)  # 300 m survives uint16
+
+    ds = FinetuneDataset({"root": str(tmp_path), "sources": {"vkitti2": {"enabled": True, "weight": 1.0}},
+                          "tasks": {"depth": {"enabled": False}}})
+    sources = [ds.items[i][0] for i in ds.sample_indices(4000, seed=2)]
+    assert 0.45 < sources.count("nyuv2") / len(sources) < 0.55  # 3 vs 12 images, still sampled 50/50
+    vk_item = next(ds[i] for i in range(len(ds)) if ds.items[i][0] == "vkitti2")
+    assert vk_item["input"].size == (1024, 288)  # long side capped at 1024 like the eval configs, then multiples of 32
+    assert vk_item["instruction"].count(", the ") == 9  # 10 VKITTI2 classes, never unannotated Cityscapes ones

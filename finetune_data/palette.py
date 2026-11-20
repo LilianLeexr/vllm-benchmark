@@ -63,6 +63,11 @@ NYU40_CLASSES = [
 ]
 
 
+# Virtual KITTI 2 classes after mapping to Cityscapes names (finetune_data.sources.vkitti2).
+VKITTI2_CLASSES = ["road", "building", "pole", "traffic light", "traffic sign", "vegetation", "terrain",
+                   "sky", "car", "truck"]
+
+
 def _lab(rgb) -> np.ndarray:
     x = np.asarray(rgb, dtype=np.float64) / 255.0
     x = np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
@@ -102,7 +107,7 @@ def build_palette() -> dict:
     cs_names = {name: rgb for name, rgb in cs.values()}
     POOL = [(name, cs_names.get(name, rgb)) for name, rgb in POOL]  # one RGB per colour name
     global_colours = dict(cs)
-    spaces = {"cityscapes19": list(cs), "nyu40": NYU40_CLASSES}
+    spaces = {"cityscapes19": list(cs), "nyu40": NYU40_CLASSES, "vkitti2": VKITTI2_CLASSES}
     out = {}
     for space, classes in spaces.items():
         colours = assign_label_space(classes, global_colours)

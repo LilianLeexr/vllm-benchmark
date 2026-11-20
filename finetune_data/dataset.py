@@ -84,6 +84,9 @@ class FinetuneDataset:
             if not source_opts.get("enabled", True):
                 continue
             source_dir = root / source
+            if not (source_dir / "meta.json").exists():
+                raise FileNotFoundError(f"source {source!r} is not built under {root}; build it (see finetune_data/README.md) "
+                                        f"or disable it with {{'sources': {{'{source}': {{'enabled': False}}}}}}")
             meta = store.read_meta(source_dir)
             self.sources[source] = {"dir": source_dir, "meta": meta, "weight": float(source_opts.get("weight", 1.0)),
                                     "palette": palette.load_palette(meta["label_space"]) if meta.get("label_space") else None}
@@ -125,7 +128,7 @@ class FinetuneDataset:
 
     def task_options(self, task: str) -> dict:
         opts = self.config["tasks"][task]
-        return {"size": {**self.config["size"], **(opts.get("size") or {})}, **opts}
+        return {**opts, "size": {**self.config["size"], **(opts.get("size") or {})}}
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         source, row, task = self.items[index]
@@ -146,7 +149,7 @@ class FinetuneDataset:
             instruction = prompts.segmentation(pal, listed, colour_format=opts.get("colour_format", "name"),
                                                template=opts.get("template") or prompts.SEGMENTATION_TEMPLATE)
         elif task == "depth":
-            depth_m = _resize_array(store.load_depth(annotation), transform)
+            depth_m = _resize_array(store.load_depth(annotation, src["meta"].get("depth_units_per_m", 1000.0)), transform)
             y = encoders.depth(depth_m, encoding=opts.get("encoding", "disparity"),
                                percentiles=tuple(opts.get("percentiles", (1.0, 99.0))))
             instruction = opts.get("instruction") or prompts.DEPTH
