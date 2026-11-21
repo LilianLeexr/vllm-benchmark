@@ -256,6 +256,16 @@ Results on the full test sets (one trial, seed 42, 40 steps, native resolution; 
 
 StableNormal threshold columns are from the StableNormal paper (Table 2). No generation or scoring failures occurred.
 
+## Fine-tuning data
+
+Union multi-task training data for instruction-tuning the editor: segmentation and depth (NYUv2, Virtual KITTI 2),
+surface normals (Hypersim) and human pose estimation (COCO, RINO protocol) as (image, instruction, target image)
+triplets whose targets and prompts match the evaluation configs above. Build it with
+`bash scripts/build_finetune_data.sh` (about 12 GB, verified against checksums) and load it with
+`finetune_data.dataset.FinetuneDataset`. It also adds in-domain test configs (`configs/indomain_*.yaml`), DIODE depth
+(`configs/diode_depth.yaml`) and RINO-style pose estimation (`configs/coco_pose_estimation.yaml`).
+Full guide, options and known issues: [`finetune_data/README.md`](finetune_data/README.md).
+
 ## Tests
 
 ```bash
