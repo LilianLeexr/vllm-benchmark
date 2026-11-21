@@ -15,14 +15,29 @@ is scored by the existing benchmark configs exactly like the zero-shot baseline.
 
 ## Build
 
+One command builds everything from the public sources (about 12 GB, ~2 hours, mostly downloads) and
+checks the result against `finetune_data/checksums/`, so every machine gets pixel-identical data
+(verified across macOS arm64 and Linux x86_64):
+
+```bash
+bash scripts/build_finetune_data.sh            # -> data/finetune_canonical; rerun to resume
+uv run python -m finetune_data.verify data/finetune_canonical   # check an existing store
+```
+
+Per source, if you only need some of it:
+
 ```bash
 bash scripts/download_nyuv2_train.sh                                   # ~2.8 GB -> raw/nyuv2_train/
 uv run python -m finetune_data.sources.nyuv2 raw/nyuv2_train data/finetune_canonical
 bash scripts/download_vkitti2.sh                                       # ~17 GB downloaded, ~1 GB kept -> raw/vkitti2/
 uv run python -m finetune_data.sources.vkitti2 raw/vkitti2 data/finetune_canonical
-uv run python -m finetune_data.sources.hypersim data/finetune_canonical --train-frames 4000   # ~17 GB streamed, ~7 GB kept; resumable
+uv run python -m finetune_data.sources.hypersim data/finetune_canonical --train-frames 4000   # ~17 GB streamed, ~8.6 GB kept; resumable
 uv run python -m finetune_data.sources.coco_pose raw/coco2017 data/finetune_canonical          # 4,100 person crops, ~0.7 GB
 ```
+
+The test sets are downloaded separately by the evaluation scripts (`scripts/download_*.sh`).
+Changing a source's parameters (frame counts, stride, test scene, seed) changes the data, so
+`verify` will report differences; that is expected.
 
 ## Use
 

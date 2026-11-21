@@ -337,3 +337,18 @@ def test_diode_depth_loader_masks_invalid_pixels(tmp_path):
     assert sample.image.size == (1024, 768) and gt.shape == (768, 1024)
     assert np.all(gt[:100] == 0) and np.all(gt[100:] == 5.0)
     assert sample.prompt == prompts.DEPTH
+
+
+def test_verify_detects_changed_pixels_but_not_reencoding(tmp_path):
+    from finetune_data import verify
+    _write_source(tmp_path)
+    src = tmp_path / "nyuv2"
+    reference = verify.source_checksums(src)
+    image = src / "images" / "nyuv2_0000.png"
+    with Image.open(image) as im:
+        pixels = np.asarray(im).copy()
+    Image.fromarray(pixels).save(image, compress_level=1)  # different bytes, same pixels
+    assert verify.compare(reference, verify.source_checksums(src)) == []
+    pixels[0, 0] = 255 - pixels[0, 0]
+    Image.fromarray(pixels).save(image)
+    assert any("different files" in p for p in verify.compare(reference, verify.source_checksums(src)))
