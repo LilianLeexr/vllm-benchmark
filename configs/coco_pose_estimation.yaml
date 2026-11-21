@@ -1,0 +1,41 @@
+# Human pose estimation, RINO protocol: COCO val2017, one sample per person (3,061 people with >= 8
+# visible keypoints), GT-box crop letterboxed to 512x768, OpenPose skeleton on black, decoded to
+# COCO-17 keypoints. Reports raw / PA PCK and OKS for RINO's colour-free decoder (comparable with RINO)
+# and for a colour decoder (rino/* and colour/*). Not the pose-preservation task (coco_pose_qwen.yaml).
+task_name: coco_pose_estimation
+generation_version: zeroshot-qwen21-bf16-s40 # change for every new model / checkpoint
+output_root: ../outputs
+system_prompt: "" # RINO's pose prompt is the whole instruction
+dataset:
+  path: coco_pose_estimation.py
+  raw_path: coco2017 # scripts/download_coco_pose.sh
+  params:
+    sample_stride: 1 # e.g. 3 for a ~1,000-person subset (keep a separate generation_version)
+    max_samples: null
+    canvas: [512, 768]
+evaluator:
+  path: pose_skeleton.py
+aggregator:
+  path: pose_skeleton.py
+model:
+  backend: qwen
+  id: Qwen/Qwen-Image-2.1
+  revision: 790c92633540aa0cb11d9abf19eb46d861714758
+  cache_dir: ../model-cache
+  profile: custom # A10G 24 GB: bf16 transformer and VAE on the GPU; the 17 GB text encoder is CPU-offloaded
+  options:
+    transformer_precision: bf16
+    text_encoder_precision: bf16
+    text_encoder_cpu_offload: true
+    vae_precision: bf16
+    num_inference_steps: 40 # same as the papers and the team's other tasks
+trials: 1
+base_seed: 42
+concurrency: 1
+retries:
+  max_attempts: 3
+  base_delay_s: 1
+  max_delay_s: 30
+save_inputs: true
+s3:
+  enabled: false

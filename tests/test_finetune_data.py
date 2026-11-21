@@ -1,5 +1,6 @@
 """Fine-tuning data pipeline: targets must decode correctly with our existing evaluators."""
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +18,7 @@ normal_eval = load_module(TASKS / "evaluators" / "surface_normal.py")
 cityscapes = load_module(TASKS / "dataloaders" / "cityscapes.py")
 
 
-NYU_ONLY = {"vkitti2": {"enabled": False}}
+NYU_ONLY = {"vkitti2": {"enabled": False}, "hypersim": {"enabled": False}, "coco_pose": {"enabled": False}}
 
 
 def _cfg(root: Path, **extra) -> dict:
@@ -153,7 +154,7 @@ def test_depth_units_and_two_source_balance(tmp_path):
     store.write_meta(out, {"source": "vkitti2", "label_space": "vkitti2", "depth_units_per_m": 100.0})
     assert np.allclose(store.load_depth(out / "depth" / "vkitti2_0.png", 100.0), 300.0)  # 300 m survives uint16
 
-    ds = FinetuneDataset({"root": str(tmp_path), "sources": {"vkitti2": {"enabled": True, "weight": 1.0}},
+    ds = FinetuneDataset({"root": str(tmp_path), "sources": {"vkitti2": {"enabled": True, "weight": 1.0}, "hypersim": {"enabled": False}, "coco_pose": {"enabled": False}},
                           "tasks": {"depth": {"enabled": False}}})
     sources = [ds.items[i][0] for i in ds.sample_indices(4000, seed=2)]
     assert 0.45 < sources.count("nyuv2") / len(sources) < 0.55  # 3 vs 12 images, still sampled 50/50
@@ -208,3 +209,113 @@ def test_indomain_eval_loaders_score_training_targets_perfectly(tmp_path):
     assert sample.prompt == item["instruction"] and sample.image.size == item["target"].size == (1024, 768)
     scores = depth_eval.score(item["target"], sample, {"eigen_crop": False})
     assert scores["abs_rel"] < 0.02
+
+
+def _hypersim():
+    return load_module(Path(__file__).resolve().parents[1] / "finetune_data" / "sources" / "hypersim.py")
+
+
+def test_hypersim_geometry_helpers():
+    hs = _hypersim()
+    # standard Hypersim camera: 60 deg horizontal FOV, looking down -z
+    row = {f"M_cam_from_uv_{i}{j}": v for (i, j), v in np.ndenumerate(np.diag([0.57735, 0.43301, -1.0]))}
+    rays = hs.camera_rays(row)
+    assert rays.shape == (768, 1024, 3) and np.all(rays[..., 2] == -1.0)
+    assert rays[0, 0, 0] < 0 < rays[0, 0, 1]  # top-left pixel: left (-x) and up (+y)
+    centre = hs.planar_depth(np.full((768, 1024), 2.0), rays)
+    assert np.isclose(centre[384, 512], 2.0, atol=1e-3) and centre[0, 0] < 2.0  # off-axis: distance > depth
+    # a wall facing the camera (+z) is kept; a back-facing (-z) one is flipped; lengths become 1
+    normals = np.zeros((768, 1024, 3)); normals[..., 2] = 2.0; normals[:10, :, 2] = -1.0
+    fixed = hs.fix_normals(normals, rays)
+    assert np.allclose(fixed[..., 2], 1.0)
+    rgb = np.full((4, 4, 3), 0.5); assert np.all(hs.tone_map(rgb, np.ones((4, 4), int)) <= 1)
+
+
+def test_hypersim_frame_selection():
+    hs = _hypersim()
+    text = "\n".join(f"ai_00{s}_001/rgb_cam_00_fr{f:04d}.png x y" for s in range(3) for f in range(100))
+    frames = hs.parse_split(text)
+    assert frames[0] == ("ai_000_001", "cam_00", 0) and len(frames) == 300
+    chosen = hs.select_evenly(frames, 30)
+    assert len(chosen) == 30 and {s for s, _, _ in chosen} == {"ai_000_001", "ai_001_001", "ai_002_001"}
+    assert [f for s, _, f in chosen if s == "ai_000_001"] == list(range(0, 100, 10))
+    assert hs.parse_split("val/ai_052_003/rgb_cam_01_fr0031.png val/x.npy") == [("ai_052_003", "cam_01", 31)]
+
+
+def test_normals_source_and_per_source_tasks(tmp_path):
+    _write_source(tmp_path)
+    out = tmp_path / "hypersim"
+    xyz = np.zeros((480, 640, 3)); xyz[..., 1] = 1.0; xyz[:240, :, 1] = 0; xyz[:240, :, 2] = 1.0  # floor below, wall above
+    rows = []
+    for i in range(2):
+        sid = f"hypersim_{i}"
+        store.save_image(out / "images" / f"{sid}.png", np.zeros((480, 640, 3)))
+        store.save_normals(out / "normals" / f"{sid}.npz", xyz)
+        store.save_label(out / "seg" / f"{sid}.png", np.ones((480, 640)))
+        rows.append({"id": sid, "source": "hypersim", "split": "train", "image": f"images/{sid}.png",
+                     "normals": f"normals/{sid}.npz", "seg": f"seg/{sid}.png"})
+    store.write_manifest(out, rows)
+    store.write_meta(out, {"source": "hypersim", "label_space": "nyu40"})
+    assert np.allclose(store.load_normals(out / "normals" / "hypersim_0.npz"), xyz, atol=1e-3)
+    ds = FinetuneDataset({"root": str(tmp_path), "sources": NYU_ONLY | {"hypersim": {"tasks": ["normals"]}}})
+    assert ds.counts() == {("segmentation", "nyuv2"): 3, ("depth", "nyuv2"): 3, ("normals", "hypersim"): 2}
+    item = next(ds[i] for i in range(len(ds)) if ds.items[i][2] == "normals")
+    assert item["instruction"] == prompts.NORMALS and item["target"].size == (640, 480)
+    target = np.asarray(item["target"], dtype=np.float64)
+    errors, _ = normal_eval.angular_errors(2 * target / 255 - 1, np.ones((480, 640), bool), xyz, rgb_to_gt=["-r", "+g", "+b"])
+    assert errors.max() < 1.0
+    both = FinetuneDataset({"root": str(tmp_path), "sources": NYU_ONLY | {"hypersim": {"tasks": ["normals", "segmentation"]}}})
+    assert both.counts()[("segmentation", "hypersim")] == 2
+
+
+def test_subsets_for_single_task_adapters(tmp_path):
+    from finetune_data import export as exporter
+    from finetune_data.dataset import subset_config
+    _write_source(tmp_path)
+    base = {"root": str(tmp_path), "sources": NYU_ONLY}
+    depth_only = FinetuneDataset(subset_config(base, tasks=["depth"], sources=["nyuv2"]))
+    assert depth_only.counts() == {("depth", "nyuv2"): 3}
+    with pytest.raises(ValueError, match="unknown tasks"):
+        subset_config(base, tasks=["gesture"])
+    assert exporter.groups(base) == [("depth", "nyuv2"), ("segmentation", "nyuv2")]
+    n = exporter.export(tmp_path / "out", base, tasks=["segmentation"])
+    rows = [json.loads(line) for line in (tmp_path / "out" / "manifest.jsonl").read_text().splitlines()]
+    assert n == 3 and {r["task"] for r in rows} == {"segmentation"}
+    assert np.isclose(sum(r["sample_weight"] for r in rows), 1.0)
+
+
+def _upright_person(scale=1.0, dx=0.0, dy=0.0):
+    rp = load_module(TASKS / "evaluators" / "_rino_pose.py")
+    k = np.zeros((17, 3), np.float32)
+    k[:, :2] = rp.TEMPLATE * np.array([300, 600]) * scale + np.array([100 + dx, 80 + dy])
+    k[:, 2] = 2
+    return rp, k
+
+
+def test_rino_pose_render_decode_and_metrics():
+    rp, k = _upright_person()
+    img = rp.render_skeleton(k, rp.CANVAS, joint_radius=6, bone_width=2)
+    # an upright frontal person: RINO's template decoder gets the body (its head heuristic is approximate),
+    # the colour decoder gets every joint
+    assert rp.metrics(rp.decode_pose(img), k, (300.0, 600.0))["c05"] >= 12
+    assert rp.metrics(rp.decode_pose_colour(img), k, (300.0, 600.0))["c05"] == 17
+    assert rp.average([rp.metrics(k, k, (300.0, 600.0))])["pck@0.05"] == 1.0
+    canvas, s, ox, oy = rp.letterbox(Image.new("RGB", (200, 100)))
+    assert canvas.size == (512, 768) and np.allclose(rp.unletterbox_kpts(rp.letterbox_kpts(k, s, ox, oy), s, ox, oy), k)
+
+
+def test_pose_source_renders_rino_canvas(tmp_path):
+    rp, k = _upright_person(scale=0.5)
+    out = tmp_path / "coco_pose"
+    store.save_image(out / "images" / "p0.png", np.zeros((400, 300, 3)))
+    store.write_manifest(out, [{"id": "p0", "source": "coco_pose", "split": "train", "image": "images/p0.png",
+                                "pose": {"keypoints": k.tolist(), "bbox_wh": [150.0, 300.0]}}])
+    store.write_meta(out, {"source": "coco_pose", "tasks": ["pose"]})
+    ds = FinetuneDataset({"root": str(tmp_path), "sources": NYU_ONLY | {"nyuv2": {"enabled": False},
+                                                                      "coco_pose": {"enabled": True}}})
+    item = ds[0]
+    assert item["task"] == "pose" and item["input"].size == item["target"].size == (512, 768)
+    assert item["instruction"] == rp.PROMPT == prompts.POSE
+    _, s, ox, oy = rp.letterbox(Image.new("RGB", (300, 400)))
+    pred = rp.unletterbox_kpts(rp.decode_pose_colour(item["target"]), s, ox, oy)
+    assert rp.metrics(pred, k, (150.0, 300.0))["c05"] == 17

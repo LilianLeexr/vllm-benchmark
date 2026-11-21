@@ -5,9 +5,12 @@ root: data/finetune_canonical   # canonical store built by finetune_data.sources
 splits: [train]                  # train | val (held out from train, for checkpoint selection) | test
 seed: 0
 
-sources:                         # weight: share within each task (before dividing by the source's size)
+sources:                         # weight: share within each task (before dividing by the source's size);
+                                 # tasks: optional list restricting which tasks a source is used for
   nyuv2: {enabled: true, weight: 1.0}
   vkitti2: {enabled: true, weight: 1.0}
+  hypersim: {enabled: true, weight: 1.0, tasks: [normals]}  # also has NYU-40 seg + depth; list them to use them
+  coco_pose: {enabled: true, weight: 1.0}
 
 size:                            # default geometry, overridable per task under tasks.<task>.size
   max_size: [1024, 1024]
@@ -35,3 +38,10 @@ tasks:                           # weight: share of samples drawn for this task
     weight: 1.0
     instruction: null            # default: the normals eval system prompt + prompt
     size: {}                     # as in configs/qwen_normal_*.yaml (native size, max 1024)
+  pose:
+    enabled: true                # RINO human pose estimation: person crop -> OpenPose skeleton on black
+    weight: 1.0
+    instruction: null            # default: RINO's pose prompt (also used by configs/coco_pose_estimation*.yaml)
+    canvas: [512, 768]           # RINO's fixed letterbox canvas (W, H); no other resizing
+    joint_radius: 6              # joint discs must stay thicker than bones for decoding;
+    bone_width: 2                #   6 / 2 decode best with both decoders (see finetune_data/README.md)

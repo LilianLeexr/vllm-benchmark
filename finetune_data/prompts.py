@@ -39,3 +39,13 @@ def segmentation(palette, class_ids: list[int], *, colour_format: str = "name",
     parts = [f"the {palette[i - 1][0]} {colour_text(palette[i - 1][1], palette[i - 1][2], colour_format)}"
              for i in class_ids]
     return template.replace("{class_color_list}", ", ".join(parts))
+
+
+# RINO's human-pose prompt (tasks/evaluators/_rino_pose.py), used for training and evaluation.
+def _rino_pose_prompt() -> str:
+    from pathlib import Path
+    from visionbench.plugins import load_module
+    return load_module(Path(__file__).resolve().parents[1] / "tasks" / "evaluators" / "_rino_pose.py").PROMPT
+
+
+POSE = _rino_pose_prompt()

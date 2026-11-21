@@ -6,7 +6,9 @@ Layout under <root>/<source>/:
     images/<id>.png    RGB input at original resolution
     seg/<id>.png       uint8 class ids in the source's label space (0 = void)
     depth/<id>.png     uint16 depth, meta['depth_units_per_m'] units per metre (default 1000 = mm; 0 = invalid)
-    normals/<id>.npy   float16 HxWx3 unit normals in the evaluators' frame (NaN = invalid)
+    pose               inline in manifest.jsonl: {keypoints: 17 x (x, y, v) in image pixels, bbox_wh}
+    normals/<id>.npz   float16 HxWx3 unit normals in the evaluators' frame, compressed (NaN = invalid);
+                       plain .npy is also read
 
 Rendering to (x, t, y) happens later in finetune_data.dataset, so image size, prompts and
 target encodings can change without rebuilding the store.
@@ -20,7 +22,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-ANNOTATIONS = {"segmentation": "seg", "depth": "depth", "normals": "normals"}
+ANNOTATIONS = {"segmentation": "seg", "depth": "depth", "normals": "normals", "pose": "pose"}
 
 
 def write_meta(source_dir: Path, meta: dict) -> None:
@@ -74,5 +76,16 @@ def load_depth(path: Path, units_per_m: float = 1000.0) -> np.ndarray:
         return np.asarray(image, dtype=np.float64) / units_per_m
 
 
+def save_normals(path: Path, xyz: np.ndarray) -> None:
+    """Unit normals (H, W, 3) in the evaluators' frame; non-finite = invalid. Stored as compressed float16."""
+    path = Path(path).with_suffix(".npz")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(path, normals=np.asarray(xyz, dtype=np.float16))
+
+
 def load_normals(path: Path) -> np.ndarray:
+    path = Path(path)
+    if path.suffix == ".npz":
+        with np.load(path) as data:
+            return data["normals"].astype(np.float32)
     return np.load(path).astype(np.float32)

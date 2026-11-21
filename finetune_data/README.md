@@ -20,6 +20,8 @@ bash scripts/download_nyuv2_train.sh                                   # ~2.8 GB
 uv run python -m finetune_data.sources.nyuv2 raw/nyuv2_train data/finetune_canonical
 bash scripts/download_vkitti2.sh                                       # ~17 GB downloaded, ~1 GB kept -> raw/vkitti2/
 uv run python -m finetune_data.sources.vkitti2 raw/vkitti2 data/finetune_canonical
+uv run python -m finetune_data.sources.hypersim data/finetune_canonical --train-frames 4000   # ~17 GB streamed, ~7 GB kept; resumable
+uv run python -m finetune_data.sources.coco_pose raw/coco2017 data/finetune_canonical          # 4,100 person crops, ~0.7 GB
 ```
 
 ## Use
@@ -45,6 +47,7 @@ uv run python -m finetune_data.export data/finetune_export --splits train
 |---|---|---|
 | `splits` | `[train]` | `train`, `val` (held out from train for checkpoint selection), `test` |
 | `sources.<name>.weight` | 1 | share within each task; each (task, source) group is sampled evenly regardless of size |
+| `sources.<name>.tasks` | all it has | restrict a source to some tasks (Hypersim: `[normals]`) |
 | `tasks.<task>.enabled / weight` | all on, 1 | which tasks to train and their sampling share |
 | `size` (+ `tasks.<task>.size`) | per task, as in the eval configs | `max_size`, `max_area`, `upscale_long_side`, `size_multiple` |
 | `tasks.segmentation.class_list` | `all` | `all` lists every class of the label space (Vision Banana; our baseline protocol), `present` only the classes in the image |
@@ -75,6 +78,7 @@ renderer's geometry, prompts and colours (`tasks/dataloaders/finetune_semseg.py`
 | `configs/indomain_vkitti2_semseg_{present,all}.yaml` | VKITTI2 Scene02, 282 images, 10 classes | |
 | `configs/indomain_vkitti2_depth.yaml` | VKITTI2 Scene02 | `max_depth: 80`, no Eigen crop |
 | `configs/qwen_nyuv2_depth.yaml` (existing) | NYUv2 test, 654 images | same images; raw sensor depth, Marigold protocol |
+| `configs/coco_pose_estimation.yaml` | COCO val2017, 3,061 persons | RINO protocol; reports `rino/*` (RINO's decoder, comparable with RINO) and `colour/*` (decodes by joint colour) |
 
 ```bash
 uv run visionbench run --config configs/indomain_vkitti2_depth.yaml
@@ -83,7 +87,7 @@ uv run visionbench run --config configs/indomain_vkitti2_depth.yaml
 Set a new `generation_version` for every model or checkpoint. Scores are computed at the
 original resolution, so even a perfect prediction at the 1024-wide model resolution loses a
 little at class / depth boundaries on VKITTI2 (oracle: mIoU 0.94, AbsRel 0.03); NYUv2 is not
-resized for segmentation (oracle mIoU 1.0). Out-of-domain sets keep their existing configs
+resized for segmentation (oracle mIoU 1.0). Pose: RINO's decoder matches joints to an upright frontal template without using colour, so even perfectly drawn GT skeletons score only ~0.37 PCK@0.1 on COCO val (side views and bent poses get mislabelled); the colour decoder reaches ~0.99 on the same drawings. Report `rino/*` for comparison with RINO and `colour/*` for what a fine-tuned model actually draws. Out-of-domain sets keep their existing configs
 (Cityscapes, ADE20K, iBims / DIODE).
 
 ## Sources
@@ -92,6 +96,8 @@ resized for segmentation (oracle mIoU 1.0). Out-of-domain sets keep their existi
 |---|---|---|---|
 | `nyuv2` | segmentation (NYU-40), depth | 745 train / 50 val / 654 test | official labeled set; test = the Eigen split our evaluators use |
 | `vkitti2` | segmentation (10 Cityscapes classes), depth | 2230 train / 50 val / 282 test | Camera_0, 6 weather variations, every 5th frame; test = all of Scene02 (shortest scene); depth in cm, sky invalid |
+| `hypersim` | normals (default); also NYU-40 segmentation and depth | 4000 train / 100 val | Marigold's filtered frames, spread evenly over 347 scenes; Marigold's normal preprocessing, so normals are in the eval GT frame |
+| `coco_pose` | human pose estimation (RINO protocol) | 4000 train / 100 val | train2017 only, one person per image; person crop + 17 keypoints, letterboxed to 512x768 and drawn as an OpenPose skeleton when rendered |
 
 VKITTI2 classes are mapped to Cityscapes names and colours (Tree/Vegetation -> vegetation,
 Van -> car, GuardRail/Misc -> void). Change the test scene or frame stride with
@@ -99,6 +105,16 @@ Van -> car, GuardRail/Misc -> void). Change the test scene or frame stride with
 Val frames come from the training scenes: use them for checkpoint selection, and test / out-of-domain sets for generalisation.
 When evaluating VKITTI2 depth use `max_depth: 80` (KITTI convention), not NYU's 10 m.
 
-Not yet added: Hypersim (normals), COCO train2017 (pose).
+Hypersim is used only for normals by default (`sources.hypersim.tasks: [normals]`); add `segmentation` / `depth`
+to that list to also train on its indoor NYU-40 labels and depth. It has no test split: normals are tested on
+NYUv2 / iBims / DIODE (`configs/qwen_normal_*.yaml`). Frames are read straight from the remote scene zips with
+HTTP range requests (`finetune_data/remote_zip.py`), so nothing besides the kept frames is downloaded.
+
+Pose follows RINO's human pose estimation (`tasks/evaluators/_rino_pose.py`, ported from RINO under MIT):
+each person's GT box is expanded by 25% and cropped, the crop is letterboxed into a 512x768 black canvas,
+and the target is an OpenPose-coloured skeleton (joint radius 6, bone width 2: drawn thinner or thicker,
+the decoders recover fewer joints). The test set is COCO val2017 (`configs/coco_pose_estimation.yaml`).
+This is not the pose-preservation task in `configs/coco_pose_qwen.yaml`, which asks the editor to keep the
+photo unchanged; that one stays useful to check that fine-tuning does not damage editing.
 Cityscapes and ADE20K train splits are deliberately excluded so segmentation results stay
 comparable to the zero-shot baseline and Vision Banana.

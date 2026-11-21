@@ -22,9 +22,11 @@ import yaml
 from PIL import Image
 
 from finetune_data import encoders, palette, prompts, store
+from visionbench.plugins import load_module
 from visionbench.transforms import CoordinateTransform
 
 DEFAULT_CONFIG = Path(__file__).with_name("configs") / "default.yaml"
+RINO_POSE = load_module(Path(__file__).resolve().parents[1] / "tasks" / "evaluators" / "_rino_pose.py")
 
 
 def load_config(config: dict | str | Path | None = None) -> dict:
@@ -40,6 +42,26 @@ def load_config(config: dict | str | Path | None = None) -> dict:
         return base
 
     return update(copy.deepcopy(merged), override)
+
+
+def subset_config(config: dict | str | Path | None = None, *, tasks: list[str] | None = None,
+                  sources: list[str] | None = None) -> dict:
+    """The config restricted to some tasks and/or sources, e.g. the data for one single-task LoRA:
+    FinetuneDataset(subset_config(tasks=["depth"], sources=["nyuv2"]))."""
+    merged = load_config(config)
+    if tasks is not None:
+        unknown = set(tasks) - set(merged["tasks"])
+        if unknown:
+            raise ValueError(f"unknown tasks {sorted(unknown)}; choose from {sorted(merged['tasks'])}")
+        for name, opts in merged["tasks"].items():
+            opts["enabled"] = name in tasks
+    if sources is not None:
+        unknown = set(sources) - set(merged["sources"])
+        if unknown:
+            raise ValueError(f"unknown sources {sorted(unknown)}; choose from {sorted(merged['sources'])}")
+        for name, opts in merged["sources"].items():
+            opts["enabled"] = name in sources
+    return merged
 
 
 def geometry(size: tuple[int, int], opts: dict) -> CoordinateTransform:
@@ -90,10 +112,13 @@ class FinetuneDataset:
             meta = store.read_meta(source_dir)
             self.sources[source] = {"dir": source_dir, "meta": meta, "weight": float(source_opts.get("weight", 1.0)),
                                     "palette": palette.load_palette(meta["label_space"]) if meta.get("label_space") else None}
+            source_tasks = source_opts.get("tasks")  # optional: only use this source for these tasks
             for row in store.read_manifest(source_dir):
                 if row["split"] not in splits:
                     continue
                 for task in enabled_tasks:
+                    if source_tasks is not None and task not in source_tasks:
+                        continue
                     if row.get(store.ANNOTATIONS[task]):
                         self.items.append((source, row, task))
         if not self.items:
@@ -135,6 +160,15 @@ class FinetuneDataset:
         src = self.sources[source]
         opts = self.task_options(task)
         image = store.load_image(src["dir"] / row["image"])
+        if task == "pose":  # RINO protocol: letterbox the person crop into a fixed canvas, draw the skeleton
+            canvas_size = tuple(opts.get("canvas", (512, 768)))
+            canvas, scale, ox, oy = RINO_POSE.letterbox(image, canvas_size)
+            keypoints = RINO_POSE.letterbox_kpts(np.asarray(row["pose"]["keypoints"], dtype=np.float32), scale, ox, oy)
+            y = RINO_POSE.render_skeleton(keypoints, canvas_size, joint_radius=opts.get("joint_radius", 6),
+                                          bone_width=opts.get("bone_width", 2))
+            return {"id": row["id"], "source": source, "task": task, "split": row["split"],
+                    "input": canvas, "instruction": opts.get("instruction") or prompts.POSE, "target": y}
+
         transform = geometry(image.size, opts["size"])
         x = transform.transform_image(image, resample=Image.Resampling.LANCZOS)
         annotation = src["dir"] / row[store.ANNOTATIONS[task]]
