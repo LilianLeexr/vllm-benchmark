@@ -78,6 +78,7 @@ renderer's geometry, prompts and colours (`tasks/dataloaders/finetune_semseg.py`
 | `configs/indomain_vkitti2_semseg_{present,all}.yaml` | VKITTI2 Scene02, 282 images, 10 classes | |
 | `configs/indomain_vkitti2_depth.yaml` | VKITTI2 Scene02 | `max_depth: 80`, no Eigen crop |
 | `configs/qwen_nyuv2_depth.yaml` (existing) | NYUv2 test, 654 images | same images; raw sensor depth, Marigold protocol |
+| `configs/diode_depth.yaml` | DIODE val, 771 images (out-of-domain depth) | Marigold packaging and range (0.6–350 m); `scripts/download_diode_depth.sh`. iBims-1 depth needs the password-protected TUM share, so it is not scripted |
 | `configs/coco_pose_estimation.yaml` | COCO val2017, 3,061 persons | RINO protocol; reports `rino/*` (RINO's decoder, comparable with RINO) and `colour/*` (decodes by joint colour) |
 
 ```bash

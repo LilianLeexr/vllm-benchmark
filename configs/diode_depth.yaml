@@ -1,0 +1,44 @@
+# Out-of-domain depth: DIODE val, 771 images (325 indoors + 446 outdoor), Marigold's packaging and
+# range (0.6-350 m, validity masks). Same prompt, decoding and metrics as qwen_nyuv2_depth.yaml.
+# Indoor / outdoor only: split_file diode_val_indoor_filename_list.txt / ..._outdoor_... (new generation_version).
+task_name: diode_depth
+generation_version: zeroshot-qwen21-bf16-s40 # change for every new model / checkpoint
+output_root: ../outputs
+system_prompt: ""
+dataset:
+  path: diode_depth.py
+  raw_path: diode_depth # scripts/download_diode_depth.sh
+  params:
+    split_file: diode_val_all_filename_list.txt
+    upscale_long_side: 1024 # 1024x768: native size, as in training and the NYUv2 config
+    size_multiple: 32
+    sample_stride: 1
+    max_samples: null
+evaluator:
+  path: nyuv2_depth.py
+  params:
+    min_depth: 0.6
+    max_depth: 350.0
+    eigen_crop: false
+model:
+  backend: qwen
+  id: Qwen/Qwen-Image-2.1
+  revision: 790c92633540aa0cb11d9abf19eb46d861714758
+  cache_dir: ../model-cache
+  profile: custom # A10G 24 GB: bf16 transformer and VAE on the GPU; the 17 GB text encoder is CPU-offloaded
+  options:
+    transformer_precision: bf16
+    text_encoder_precision: bf16
+    text_encoder_cpu_offload: true
+    vae_precision: bf16
+    num_inference_steps: 40 # same as the papers and the team's other tasks
+trials: 1
+base_seed: 42
+concurrency: 1
+retries:
+  max_attempts: 3
+  base_delay_s: 1
+  max_delay_s: 30
+save_inputs: true
+s3:
+  enabled: false

@@ -319,3 +319,21 @@ def test_pose_source_renders_rino_canvas(tmp_path):
     _, s, ox, oy = rp.letterbox(Image.new("RGB", (300, 400)))
     pred = rp.unletterbox_kpts(rp.decode_pose_colour(item["target"]), s, ox, oy)
     assert rp.metrics(pred, k, (150.0, 300.0))["c05"] == 17
+
+
+def test_diode_depth_loader_masks_invalid_pixels(tmp_path):
+    root = tmp_path / "diode"
+    scan = root / "indoors" / "scene_00001" / "scan_00001"
+    scan.mkdir(parents=True)
+    Image.fromarray(np.zeros((768, 1024, 3), np.uint8)).save(scan / "a.png")
+    depth = np.full((768, 1024, 1), 5.0, np.float32)
+    mask = np.ones((768, 1024)); mask[:100] = 0
+    np.save(scan / "a_depth.npy", depth); np.save(scan / "a_depth_mask.npy", mask)
+    rel = "indoors/scene_00001/scan_00001/a"
+    (root / "diode_val_all_filename_list.txt").write_text(f"{rel}.png {rel}_depth.npy {rel}_depth_mask.npy\n")
+    loader = load_module(TASKS / "dataloaders" / "diode_depth.py")
+    sample = loader.load_dataset({"raw_dir": str(root)})[0]
+    gt = sample.ground_truth["depth"]
+    assert sample.image.size == (1024, 768) and gt.shape == (768, 1024)
+    assert np.all(gt[:100] == 0) and np.all(gt[100:] == 5.0)
+    assert sample.prompt == prompts.DEPTH
